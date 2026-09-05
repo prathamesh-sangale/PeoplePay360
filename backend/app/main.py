@@ -24,9 +24,16 @@ def read_root():
         "health_url": "/api/health"
     }
 
+@app.get("/health")
 @app.get("/api/health")
 def health_check():
     return {
         "status": "healthy",
         "service": "PeoplePay360 API"
     }
+
+from app.api import api_router
+
+app.include_router(api_router)
+
+
