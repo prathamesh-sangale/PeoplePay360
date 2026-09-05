@@ -4,6 +4,10 @@ import AppShell from '../components/layout/AppShell';
 import Dashboard from '../pages/Dashboard';
 import Employees from '../pages/Employees';
 import EmployeeDetail from '../pages/EmployeeDetail';
+import Departments from '../pages/Departments';
+import Jobs from '../pages/Jobs';
+import EmployeeTypes from '../pages/EmployeeTypes';
+import BankDetails from '../pages/BankDetails';
 import Contracts from '../pages/Contracts';
 import ContractDetail from '../pages/ContractDetail';
 import Schedules from '../pages/Schedules';
@@ -33,20 +37,22 @@ export const router = createBrowserRouter([
       { index: true, element: <Navigate to="/dashboard" replace /> },
       { path: 'dashboard', element: <Dashboard /> },
       
+      // HR & Workforce Management Routes
       { path: 'employees', element: <Employees /> },
       { path: 'employees/:id', element: <EmployeeDetail /> },
-      
+      { path: 'departments', element: <Departments /> },
+      { path: 'jobs', element: <Jobs /> },
+      { path: 'employee-types', element: <EmployeeTypes /> },
+      { path: 'bank-details', element: <BankDetails /> },
       { path: 'contracts', element: <Contracts /> },
       { path: 'contracts/:id', element: <ContractDetail /> },
-      
       { path: 'schedules', element: <Schedules /> },
-      
       { path: 'attendance', element: <Attendance /> },
       { path: 'attendance/:id', element: <AttendanceDetail /> },
-      
       { path: 'time-off', element: <TimeOff /> },
       { path: 'time-off/:id', element: <TimeOffDetail /> },
       
+      // Payroll Routes
       { path: 'payroll/payruns', element: <Payruns /> },
       { path: 'payroll/payruns/:id', element: <PayrunDetail /> },
       { path: 'payroll/payslips', element: <Payslips /> },
@@ -54,9 +60,9 @@ export const router = createBrowserRouter([
       { path: 'payroll/salary-structures', element: <SalaryStructures /> },
       { path: 'payroll/salary-rules', element: <SalaryRules /> },
       
+      // System & Admin Routes
       { path: 'reports', element: <Reports /> },
       { path: 'notifications', element: <Notifications /> },
-      
       { path: 'admin/users', element: <Users /> },
       { path: 'admin/users/:id', element: <UserDetail /> },
       { path: 'admin/roles', element: <Roles /> },

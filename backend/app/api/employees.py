@@ -12,18 +12,24 @@ from app.models.attendance import Attendance
 from app.models.time_off_allocation import TimeOffAllocation
 from app.models.time_off_type import TimeOffType
 from app.models.payslip import Payslip
-from typing import Optional
+from app.payroll.payroll_engine import get_employee_leave_balances
+from typing import Optional, List
+from pydantic import BaseModel
+from datetime import date
+from sqlalchemy import or_, desc, func
+from app.auth.rbac import require_role
 
 router = APIRouter()
 
 LEAVE_COLOR_MAP = {
-    "CL": "#3B82F6",
-    "PL": "#10B981",
-    "EL": "#10B981",
+    "CL": "#10B981",
+    "PL": "#3B82F6",
+    "EL": "#3B82F6",
     "SL": "#F59E0B",
-    "ML": "#EC4899",
-    "FL": "#8B5CF6",
-    "WFH": "#06B6D4",
+    "UNPAID": "#EF4444",
+    "LOP": "#EF4444",
+    "ML": "#8B5CF6",
+    "FEST_HOL": "#06B6D4",
 }
 
 CITY_MAP = {
@@ -225,6 +231,9 @@ def get_employee_detail(id: str, db: Session = Depends(get_db)):
             "remaining_days": round(rem, 1),
         })
 
+    # Centralized leave balances summary
+    employee_leave_balances = get_employee_leave_balances(db, emp.id)
+
     # Payslips
     payslips = db.query(Payslip).filter(Payslip.employee_id == emp.id).order_by(desc(Payslip.period_start)).all()
     payslips_list = [
@@ -264,5 +273,162 @@ def get_employee_detail(id: str, db: Session = Depends(get_db)):
         "bank_accounts": banks_list,
         "attendance": attendance_list,
         "leave_allocations": leaves_list,
+        "leave_balances": employee_leave_balances,
         "payslips": payslips_list,
     }
+
+
+class EmployeeCreate(BaseModel):
+    employee_code: Optional[str] = None
+    first_name: str
+    last_name: str
+    email: str
+    phone: Optional[str] = None
+    date_of_birth: Optional[date] = None
+    date_of_joining: Optional[date] = None
+    department_id: int
+    job_id: int
+    employee_type_id: Optional[int] = None
+    manager_id: Optional[int] = None
+    status: str = "ACTIVE"
+    initial_wage: Optional[float] = None
+
+
+class EmployeeUpdate(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    date_of_birth: Optional[date] = None
+    date_of_joining: Optional[date] = None
+    department_id: Optional[int] = None
+    job_id: Optional[int] = None
+    employee_type_id: Optional[int] = None
+    manager_id: Optional[int] = None
+    status: Optional[str] = None
+
+
+@router.post("", dependencies=[Depends(require_role("HR", "ADMIN"))])
+def create_employee(payload: EmployeeCreate, db: Session = Depends(get_db)):
+    """Registers a new employee into PeoplePay360. Requires HR or ADMIN role."""
+    # Check email duplicate
+    if db.query(Employee).filter(Employee.email.ilike(payload.email.strip())).first():
+        raise HTTPException(status_code=400, detail=f"Employee with email '{payload.email}' already exists.")
+
+    # Generate or validate employee code
+    code = payload.employee_code
+    if not code:
+        count = db.query(func.count(Employee.id)).scalar() or 0
+        code = f"EMP-IND-{(count + 1):03d}"
+    else:
+        code = code.strip().upper()
+        if db.query(Employee).filter(Employee.employee_code == code).first():
+            raise HTTPException(status_code=400, detail=f"Employee code '{code}' is already assigned.")
+
+    # Validate department and job
+    dept = db.query(Department).filter(Department.id == payload.department_id).first()
+    if not dept:
+        raise HTTPException(status_code=404, detail="Department not found")
+
+    job = db.query(Job).filter(Job.id == payload.job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job title not found")
+
+    emp_type_id = payload.employee_type_id
+    if not emp_type_id:
+        first_type = db.query(EmployeeType).first()
+        emp_type_id = first_type.id if first_type else 1
+
+    joining = payload.date_of_joining or date.today()
+    dob = payload.date_of_birth or date(1995, 1, 1)
+
+    new_emp = Employee(
+        employee_code=code,
+        first_name=payload.first_name.strip(),
+        last_name=payload.last_name.strip(),
+        email=payload.email.strip().lower(),
+        phone=payload.phone.strip() if payload.phone else "+91 98765 43210",
+        date_of_birth=dob,
+        date_of_joining=joining,
+        department_id=dept.id,
+        job_id=job.id,
+        employee_type_id=emp_type_id,
+        manager_id=payload.manager_id if payload.manager_id and payload.manager_id > 0 else None,
+        status=payload.status.upper(),
+    )
+    db.add(new_emp)
+    db.flush()
+
+    # If initial wage provided, create initial contract
+    if payload.initial_wage and payload.initial_wage > 0:
+        c_num = f"CON-{code}-01"
+        from app.models.salary_structure import SalaryStructure
+        from app.models.working_schedule import WorkingSchedule
+        struct = db.query(SalaryStructure).first()
+        sched = db.query(WorkingSchedule).first()
+        new_contract = Contract(
+            employee_id=new_emp.id,
+            department_id=dept.id,
+            job_id=job.id,
+            salary_structure_id=struct.id if struct else 1,
+            working_schedule_id=sched.id if sched else 1,
+            contract_number=c_num,
+            wage=payload.initial_wage,
+            start_date=joining,
+            status="ACTIVE",
+        )
+        db.add(new_contract)
+
+    db.commit()
+    db.refresh(new_emp)
+
+    return {
+        "status": "success",
+        "message": f"Employee {new_emp.first_name} {new_emp.last_name} ({new_emp.employee_code}) created successfully.",
+        "id": str(new_emp.id),
+        "employee_code": new_emp.employee_code,
+        "name": f"{new_emp.first_name} {new_emp.last_name}".strip(),
+        "first_name": new_emp.first_name,
+        "last_name": new_emp.last_name,
+    }
+
+
+@router.put("/{id}", dependencies=[Depends(require_role("HR", "ADMIN"))])
+def update_employee(id: int, payload: EmployeeUpdate, db: Session = Depends(get_db)):
+    """Updates employee profile information and employment status."""
+    emp = db.query(Employee).filter(Employee.id == id).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    if payload.first_name is not None:
+        emp.first_name = payload.first_name.strip()
+    if payload.last_name is not None:
+        emp.last_name = payload.last_name.strip()
+    if payload.email is not None:
+        emp.email = payload.email.strip().lower()
+    if payload.phone is not None:
+        emp.phone = payload.phone.strip()
+    if payload.date_of_birth is not None:
+        emp.date_of_birth = payload.date_of_birth
+    if payload.date_of_joining is not None:
+        emp.date_of_joining = payload.date_of_joining
+    if payload.department_id is not None:
+        emp.department_id = payload.department_id
+    if payload.job_id is not None:
+        emp.job_id = payload.job_id
+    if payload.employee_type_id is not None:
+        emp.employee_type_id = payload.employee_type_id
+    if payload.manager_id is not None:
+        emp.manager_id = payload.manager_id if payload.manager_id > 0 else None
+    if payload.status is not None:
+        emp.status = payload.status.upper()
+
+    db.commit()
+    db.refresh(emp)
+
+    return {
+        "status": "success",
+        "message": f"Employee {emp.first_name} {emp.last_name} updated successfully.",
+        "id": str(emp.id),
+    }
+

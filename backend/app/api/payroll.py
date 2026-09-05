@@ -13,6 +13,7 @@ from app.models.department import Department
 from app.models.job import Job
 from app.models.contract import Contract
 from app.models.employee_bank_account import EmployeeBankAccount
+from app.payroll.payroll_engine import get_payrun_attendance_and_lop_reconciliation
 from typing import Optional
 
 router = APIRouter()
@@ -168,11 +169,22 @@ def get_payslip_detail(id: str, db: Session = Depends(get_db)):
     dept_code = dept.code if dept else "ENG"
     work_city = CITY_MAP.get(dept_code, "Bengaluru, Karnataka")
 
+    # Dynamic attendance & leave reconciliation
+    period_start = ps.period_start or date(2026, 8, 1)
+    period_end = ps.period_end or date(2026, 8, 31)
+    recon = get_payrun_attendance_and_lop_reconciliation(
+        db,
+        emp.id if emp else 1,
+        period_start,
+        period_end,
+    )
+
     # Line items
     lines = db.query(PayslipLine).filter(PayslipLine.payslip_id == ps.id).order_by(PayslipLine.sequence).all()
     earnings = []
     deductions = []
     totals = []
+    has_lop_line = False
 
     for l in lines:
         item = {
@@ -182,6 +194,8 @@ def get_payslip_detail(id: str, db: Session = Depends(get_db)):
             "category": l.category,
             "amount": float(l.amount),
         }
+        if l.code in ["LOP", "LOSS_OF_PAY"]:
+            has_lop_line = True
         if l.category in ["BASIC", "ALW", "EARNINGS", "ALLOWANCE"]:
             earnings.append(item)
         elif l.category in ["DED", "DEDUCTION", "STATUTORY"]:
@@ -189,16 +203,36 @@ def get_payslip_detail(id: str, db: Session = Depends(get_db)):
         else:
             totals.append(item)
 
+    # If LOP days exist and no explicit LOP line exists, append dynamic LOP deduction
+    lop_amount = 0.0
+    if recon["lop_days"] > 0:
+        basic_val = float(ps.basic_amount or 0)
+        work_days_count = max(1.0, float(recon["working_days"]))
+        lop_amount = round((basic_val / work_days_count) * float(recon["lop_days"]), 2)
+        if not has_lop_line:
+            deductions.append({
+                "id": "lop-auto-calc",
+                "rule_code": "LOP",
+                "rule_name": f"Loss of Pay ({recon['lop_days']} days LOP)",
+                "category": "DEDUCTION",
+                "amount": lop_amount,
+            })
+
+    total_ded = float(ps.deduction_amount or 0) + (lop_amount if not has_lop_line else 0.0)
+    net_val = float(ps.gross_amount or 0) - total_ded
+
     return {
         "id": str(ps.id),
         "payslip_number": f"PSL-2026-{ps.id:04d}",
         "period": f"{ps.period_start.strftime('%B %d, %Y')} to {ps.period_end.strftime('%B %d, %Y')}" if ps.period_start and ps.period_end else "August 2026",
+        "date_start": ps.period_start.isoformat() if ps.period_start else "2026-08-01",
+        "date_end": ps.period_end.isoformat() if ps.period_end else "2026-08-31",
         "date_from": ps.period_start.isoformat() if ps.period_start else "2026-08-01",
         "date_to": ps.period_end.isoformat() if ps.period_end else "2026-08-31",
         "basic_wage": float(ps.basic_amount or 0),
         "gross_wage": float(ps.gross_amount or 0),
-        "net_wage": float(ps.net_amount or 0),
-        "total_deductions": float(ps.deduction_amount or 0),
+        "net_wage": round(net_val, 2),
+        "total_deductions": round(total_ded, 2),
         "state": ps.status,
         "status": ps.status,
         "currency": "INR",
@@ -216,9 +250,18 @@ def get_payslip_detail(id: str, db: Session = Depends(get_db)):
             "bank_name": bank.bank_name if bank else "HDFC Bank",
             "bank_account": bank.account_number if bank else "501004892182",
             "ifsc": bank.ifsc_code if bank else "HDFC0001234",
-            "working_days": 31,
-            "worked_days": 30,
-            "lop_days": 0,
+            "working_days": recon["working_days"],
+            "worked_days": recon["worked_days"],
+            "paid_leave_days": recon["paid_leave_days"],
+            "lop_days": recon["lop_days"],
+            "lop_deduction": lop_amount,
+        },
+        "attendance_reconciliation": {
+            "working_days": recon["working_days"],
+            "worked_days": recon["worked_days"],
+            "paid_leave_days": recon["paid_leave_days"],
+            "lop_days": recon["lop_days"],
+            "lop_deduction": lop_amount,
         },
         "payrun": {
             "id": str(payrun.id) if payrun else None,
@@ -238,7 +281,7 @@ def get_payslip_detail(id: str, db: Session = Depends(get_db)):
                 "sequence": l.sequence,
             }
             for l in lines
-        ]
+        ],
     }
 
 @router.get("/salary-structures")

@@ -72,6 +72,129 @@ def get_attendance_summary(db: Session = Depends(get_db)):
         "half_day_count": half_day_count,
         "absent_count": absent_count,
         "overtime_count": overtime_count,
+        "missing_checkout_count": db.query(func.count(Attendance.id)).filter(Attendance.check_out == None, Attendance.status != "ABSENT").scalar() or 0,
         "average_worked_hours": round(float(avg_hours), 2),
         "total_overtime_hours": round(float(overtime_count * 2.5), 1),
     }
+
+
+from pydantic import BaseModel
+from datetime import datetime, timezone
+from decimal import Decimal
+from app.models.attendance_correction import AttendanceCorrection
+from app.models.user import User
+from app.auth.rbac import require_role, get_current_user
+
+
+class AttendancePunch(BaseModel):
+    employee_id: int
+    check_in: Optional[datetime] = None
+    check_out: Optional[datetime] = None
+    status: str = "PRESENT"
+    notes: Optional[str] = None
+
+
+class AttendanceCorrectionRequest(BaseModel):
+    new_check_in: Optional[datetime] = None
+    new_check_out: Optional[datetime] = None
+    reason: str
+
+
+@router.post("", dependencies=[Depends(require_role("HR", "ADMIN", "EMPLOYEE"))])
+def punch_attendance(payload: AttendancePunch, db: Session = Depends(get_db)):
+    """Records a new attendance punch or manual log entry."""
+    emp = db.query(Employee).filter(Employee.id == payload.employee_id).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    ci = payload.check_in or datetime.now(timezone.utc)
+    co = payload.check_out
+
+    worked = None
+    if ci and co:
+        diff_sec = (co - ci).total_seconds()
+        worked = Decimal(str(max(0.0, round(diff_sec / 3600.0, 2))))
+
+    att = Attendance(
+        employee_id=emp.id,
+        check_in=ci,
+        check_out=co,
+        worked_hours=worked,
+        status=payload.status.upper(),
+        notes=payload.notes,
+    )
+    db.add(att)
+    db.commit()
+    db.refresh(att)
+
+    return {
+        "status": "success",
+        "message": f"Attendance logged for {emp.first_name} {emp.last_name}.",
+        "id": str(att.id),
+        "check_in": att.check_in.isoformat() if att.check_in else None,
+        "check_out": att.check_out.isoformat() if att.check_out else None,
+        "worked_hours": float(att.worked_hours) if att.worked_hours else 0.0,
+    }
+
+
+@router.post("/{id}/correct", dependencies=[Depends(require_role("HR", "ADMIN"))])
+def correct_attendance(
+    id: int,
+    payload: AttendanceCorrectionRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Submits an attendance correction with mandatory audit reason.
+    Preserves audit history in `attendance_corrections` table and updates attendance record to CORRECTED status.
+    Requires HR or ADMIN role.
+    """
+    if not payload.reason or len(payload.reason.strip()) < 5:
+        raise HTTPException(status_code=400, detail="Mandatory audit reason (at least 5 characters) is required for attendance correction.")
+
+    att = db.query(Attendance).filter(Attendance.id == id).first()
+    if not att:
+        raise HTTPException(status_code=404, detail="Attendance record not found")
+
+    old_ci = att.check_in
+    old_co = att.check_out
+
+    new_ci = payload.new_check_in if payload.new_check_in is not None else old_ci
+    new_co = payload.new_check_out if payload.new_check_out is not None else old_co
+
+    # Calculate corrected worked hours
+    worked = None
+    if new_ci and new_co:
+        diff_sec = (new_co - new_ci).total_seconds()
+        worked = Decimal(str(max(0.0, round(diff_sec / 3600.0, 2))))
+
+    # 1. Create audit correction record
+    corr = AttendanceCorrection(
+        attendance_id=att.id,
+        corrected_by_user_id=current_user.id,
+        old_check_in=old_ci,
+        old_check_out=old_co,
+        new_check_in=new_ci,
+        new_check_out=new_co,
+        reason=payload.reason.strip(),
+    )
+    db.add(corr)
+
+    # 2. Update attendance record
+    att.check_in = new_ci
+    att.check_out = new_co
+    att.worked_hours = worked
+    att.status = "CORRECTED"
+    att.notes = f"Corrected by {current_user.username}: {payload.reason.strip()}"
+
+    db.commit()
+    db.refresh(att)
+
+    return {
+        "status": "success",
+        "message": f"Attendance #{att.id} corrected successfully. Audit record #{corr.id} created.",
+        "id": str(att.id),
+        "status_state": att.status,
+        "worked_hours": float(att.worked_hours) if att.worked_hours else 0.0,
+    }
+

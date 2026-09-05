@@ -1,15 +1,20 @@
-import { useQuery } from '@tanstack/react-query';
-import { getDashboardStats } from '../lib/api';
-import { formatINR, formatINRPerAnnum, getStatusBadgeClass } from '../lib/formatters';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { getDashboardStats, getHRDashboardStats, approveTimeOffRequest, rejectTimeOffRequest } from '../lib/api';
+import { formatINR, formatINRPerAnnum } from '../lib/formatters';
+import { useRole } from '../context/RoleContext';
 import {
   Users,
   IndianRupee,
   Clock,
   AlertTriangle,
-  TrendingUp,
-  FileCheck2,
   ChevronRight,
   CheckCircle2,
+  Calendar,
+  Briefcase,
+  Building,
+  Plus,
+  Check,
+  X,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import {
@@ -25,44 +30,418 @@ import {
   Cell,
 } from 'recharts';
 
-const COLORS = ['#6366F1', '#3B82F6', '#10B981', '#F59E0B', '#EC4899', '#8B5CF6'];
-
 export default function Dashboard() {
-  const { data, isLoading, error, refetch } = useQuery({
+  const { currentRole, currentPersona } = useRole();
+  const queryClient = useQueryClient();
+
+  // Admin / General Stats
+  const {
+    data: adminData,
+    isLoading: isAdminLoading,
+  } = useQuery({
     queryKey: ['dashboard-stats'],
     queryFn: getDashboardStats,
   });
 
-  if (isLoading) {
+  // Dedicated Live HR Stats
+  const {
+    data: hrData,
+    isLoading: isHRLoading,
+  } = useQuery({
+    queryKey: ['dashboard-hr-stats'],
+    queryFn: getHRDashboardStats,
+    enabled: currentRole === 'HR' || currentRole === 'ADMIN',
+  });
+
+  // Leave Quick Actions
+  const approveLeaveMutation = useMutation({
+    mutationFn: (id: number) => approveTimeOffRequest(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['dashboard-hr-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['time-off-requests'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+    },
+  });
+
+  const rejectLeaveMutation = useMutation({
+    mutationFn: ({ id, reason }: { id: number; reason: string }) => rejectTimeOffRequest(id, reason),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['dashboard-hr-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['time-off-requests'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+    },
+  });
+
+  const isHR = currentRole === 'HR';
+  const isAdmin = currentRole === 'ADMIN';
+  const isPayroll = currentRole === 'PAYROLL';
+
+  if (isAdminLoading && isHRLoading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
         <div className="flex flex-col items-center gap-3">
           <div className="w-10 h-10 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
-          <p className="text-sm text-muted-foreground font-medium">Loading PeoplePay360 Dashboard...</p>
+          <p className="text-sm text-muted-foreground font-medium">Loading PeoplePay360 Portal...</p>
         </div>
       </div>
     );
   }
 
-  if (error || !data) {
+  // ==========================================
+  // HR PORTAL DASHBOARD VIEW
+  // ==========================================
+  if (isHR && hrData) {
+    const { workforce, attendance, leaves, contracts, department_distribution, recent_pending_leaves, recent_new_hires } = hrData;
+
+    const deptChartData = department_distribution.map((d: any) => ({
+      name: d.code,
+      fullName: d.name,
+      employees: d.employee_count,
+    }));
+
+    const leavePieData = [
+      { name: 'Privilege Leave (PL)', value: leaves.pl_remaining || 15, color: '#3B82F6' },
+      { name: 'Casual Leave (CL)', value: leaves.cl_remaining || 12, color: '#10B981' },
+      { name: 'Sick Leave (SL)', value: leaves.sl_remaining || 12, color: '#F59E0B' },
+    ];
+
     return (
-      <div className="p-6 text-center">
-        <div className="inline-flex p-3 rounded-full bg-rose-500/10 text-rose-500 mb-3">
-          <AlertTriangle size={24} />
+      <div className="space-y-8 animate-in fade-in duration-500">
+        {/* Welcome Header */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-gradient-to-r from-blue-500/10 via-primary/5 to-transparent p-6 rounded-3xl border border-blue-500/20">
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-blue-500/10 text-blue-500 border border-blue-500/20">
+                <Users size={13} />
+                Human Resources Portal
+              </span>
+              <span className="text-xs text-muted-foreground">Logged in as {currentPersona.full_name} ({currentPersona.display_title})</span>
+            </div>
+            <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight text-foreground">
+              HR Workforce Intelligence
+            </h1>
+            <p className="text-xs md:text-sm text-muted-foreground mt-1">
+              Real-time employee headcount, attendance punctuality, leave requests, and contract renewal monitoring.
+            </p>
+          </div>
+
+          {/* Quick Action Buttons */}
+          <div className="flex flex-wrap items-center gap-2.5">
+            <Link
+              to="/employees"
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-primary text-primary-foreground font-semibold rounded-xl text-xs shadow-md shadow-primary/20 hover:opacity-90 transition-all"
+            >
+              <Plus size={14} /> Add Employee
+            </Link>
+            <Link
+              to="/contracts"
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-card hover:bg-accent text-foreground border border-border font-semibold rounded-xl text-xs transition-all"
+            >
+              <Briefcase size={14} /> Contracts
+            </Link>
+            <Link
+              to="/attendance"
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-card hover:bg-accent text-foreground border border-border font-semibold rounded-xl text-xs transition-all"
+            >
+              <Clock size={14} /> Attendance
+            </Link>
+            <Link
+              to="/time-off"
+              className="flex items-center gap-1.5 px-3.5 py-2 bg-card hover:bg-accent text-foreground border border-border font-semibold rounded-xl text-xs transition-all"
+            >
+              <Calendar size={14} /> Leaves
+            </Link>
+          </div>
         </div>
-        <h3 className="text-lg font-semibold mb-1">Failed to load dashboard data</h3>
-        <p className="text-sm text-muted-foreground mb-4">Please make sure the FastAPI backend is running.</p>
-        <button
-          onClick={() => refetch()}
-          className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:opacity-90"
-        >
-          Try Again
-        </button>
+
+        {/* 1. Core HR Metrics KPIs */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* Total Workforce */}
+          <div className="p-5 rounded-2xl bg-card border border-border shadow-xs hover:border-primary/40 transition-all">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Total Headcount</span>
+              <div className="p-2 rounded-xl bg-blue-500/10 text-blue-500">
+                <Users size={18} />
+              </div>
+            </div>
+            <div className="mt-3 text-3xl font-extrabold text-foreground">{workforce.total_employees}</div>
+            <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+              <span>{workforce.active_employees} active staff</span>
+              <span>{workforce.departments_count} depts</span>
+            </div>
+          </div>
+
+          {/* Attendance Today */}
+          <div className="p-5 rounded-2xl bg-card border border-border shadow-xs hover:border-primary/40 transition-all">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Present Today</span>
+              <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-500">
+                <CheckCircle2 size={18} />
+              </div>
+            </div>
+            <div className="mt-3 text-3xl font-extrabold text-emerald-500">{attendance.present_today}</div>
+            <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+              <span>{attendance.late_today} late arrivals</span>
+              <span className="font-bold text-emerald-500">{attendance.attendance_rate}% rate</span>
+            </div>
+          </div>
+
+          {/* Pending Leaves */}
+          <div className="p-5 rounded-2xl bg-card border border-border shadow-xs hover:border-primary/40 transition-all">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Leave Requests</span>
+              <div className="p-2 rounded-xl bg-amber-500/10 text-amber-500">
+                <Calendar size={18} />
+              </div>
+            </div>
+            <div className="mt-3 text-3xl font-extrabold text-amber-500">{leaves.pending_requests}</div>
+            <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+              <span>{leaves.approved_requests} approved</span>
+              <span>{leaves.on_leave_today} on leave today</span>
+            </div>
+          </div>
+
+          {/* Contracts Monitoring */}
+          <div className="p-5 rounded-2xl bg-card border border-border shadow-xs hover:border-primary/40 transition-all">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Active Contracts</span>
+              <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-500">
+                <Briefcase size={18} />
+              </div>
+            </div>
+            <div className="mt-3 text-3xl font-extrabold text-indigo-500">{contracts.active_contracts}</div>
+            <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+              {contracts.expiring_soon > 0 ? (
+                <span className="text-amber-500 font-bold flex items-center gap-1">
+                  <AlertTriangle size={12} /> {contracts.expiring_soon} expiring soon
+                </span>
+              ) : (
+                <span className="text-emerald-500 font-medium">All contracts healthy</span>
+              )}
+              <span>{contracts.expired_contracts} expired</span>
+            </div>
+          </div>
+        </div>
+
+        {/* 2. Charts Section: Department Distribution & Leave Overview */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Department Headcount Distribution */}
+          <div className="lg:col-span-2 p-6 rounded-3xl bg-card border border-border shadow-xs space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold text-foreground flex items-center gap-2">
+                  <Building size={18} className="text-primary" /> Headcount by Department
+                </h3>
+                <p className="text-xs text-muted-foreground mt-0.5">Active workforce distribution across enterprise units</p>
+              </div>
+              <Link to="/departments" className="text-xs text-primary font-bold hover:underline flex items-center gap-1">
+                View All <ChevronRight size={14} />
+              </Link>
+            </div>
+
+            <div className="h-64 w-full pt-4">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={deptChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
+                  <XAxis dataKey="name" fontSize={11} stroke="currentColor" className="text-muted-foreground" />
+                  <YAxis fontSize={11} stroke="currentColor" className="text-muted-foreground" />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)', borderRadius: '1rem', fontSize: '12px' }}
+                    labelFormatter={(val) => deptChartData.find((d: any) => d.name === val)?.fullName || val}
+                  />
+                  <Bar dataKey="employees" name="Employees" fill="#3B82F6" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Leave Quotas & Allocation Summary */}
+          <div className="p-6 rounded-3xl bg-card border border-border shadow-xs space-y-4">
+            <div>
+              <h3 className="text-base font-bold text-foreground flex items-center gap-2">
+                <Calendar size={18} className="text-emerald-500" /> Leave Balances Quota
+              </h3>
+              <p className="text-xs text-muted-foreground mt-0.5">Unified statutory policy pools (FY 2026-27)</p>
+            </div>
+
+            <div className="h-44 w-full flex items-center justify-center">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={leavePieData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={45}
+                    outerRadius={65}
+                    paddingAngle={4}
+                    dataKey="value"
+                  >
+                    {leavePieData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.color} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)', borderRadius: '0.75rem', fontSize: '11px' }}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div className="space-y-2 pt-2 border-t border-border text-xs">
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-muted-foreground">
+                  <span className="w-2.5 h-2.5 rounded-full bg-blue-500"></span> Privilege Leave (PL)
+                </span>
+                <span className="font-bold text-foreground font-mono">{leaves.pl_remaining} days</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-muted-foreground">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Casual Leave (CL)
+                </span>
+                <span className="font-bold text-foreground font-mono">{leaves.cl_remaining} days</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-muted-foreground">
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span> Sick Leave (SL)
+                </span>
+                <span className="font-bold text-foreground font-mono">{leaves.sl_remaining} days</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 3. Actionable Tables: Pending Leaves & Recent Joinings */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Pending Leave Requests for Quick Action */}
+          <div className="p-6 rounded-3xl bg-card border border-border shadow-xs space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold text-foreground flex items-center gap-2">
+                  <Clock size={18} className="text-amber-500" /> Pending Leave Approvals
+                </h3>
+                <p className="text-xs text-muted-foreground mt-0.5">Review and approve employee time off requests</p>
+              </div>
+              <Link to="/time-off" className="text-xs text-primary font-bold hover:underline flex items-center gap-1">
+                All Requests ({leaves.pending_requests}) <ChevronRight size={14} />
+              </Link>
+            </div>
+
+            <div className="space-y-2.5">
+              {recent_pending_leaves && recent_pending_leaves.length > 0 ? (
+                recent_pending_leaves.map((r: any) => (
+                  <div
+                    key={r.id}
+                    className="p-3.5 rounded-2xl bg-background border border-border/80 flex items-center justify-between gap-3 hover:border-primary/40 transition-all"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-xs text-foreground">{r.employee_name}</span>
+                        <span className="text-[10px] font-mono px-2 py-0.2 rounded-full font-bold bg-primary/10 text-primary border border-primary/20">
+                          {r.leave_code}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-muted-foreground mt-0.5">
+                        {r.start_date} → {r.end_date} ({r.days} {r.days === 1 ? 'day' : 'days'})
+                      </div>
+                      {r.reason && <div className="text-[10px] text-muted-foreground/80 italic mt-0.5 truncate max-w-xs">{r.reason}</div>}
+                    </div>
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        onClick={() => approveLeaveMutation.mutate(Number(r.id))}
+                        disabled={approveLeaveMutation.isPending}
+                        title="Approve Request"
+                        className="p-2 rounded-xl bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500 hover:text-white border border-emerald-500/20 transition-all"
+                      >
+                        <Check size={14} />
+                      </button>
+                      <button
+                        onClick={() => rejectLeaveMutation.mutate({ id: Number(r.id), reason: 'Manager review' })}
+                        disabled={rejectLeaveMutation.isPending}
+                        title="Refuse Request"
+                        className="p-2 rounded-xl bg-rose-500/10 text-rose-500 hover:bg-rose-500 hover:text-white border border-rose-500/20 transition-all"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="p-8 text-center text-xs text-muted-foreground bg-background rounded-2xl border border-dashed border-border">
+                  <CheckCircle2 size={24} className="mx-auto text-emerald-500 mb-2 opacity-80" />
+                  No pending leave requests. All employee leaves reviewed!
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Recent Joinings & Workforce Additions */}
+          <div className="p-6 rounded-3xl bg-card border border-border shadow-xs space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold text-foreground flex items-center gap-2">
+                  <Users size={18} className="text-blue-500" /> Recent Employee Onboardings
+                </h3>
+                <p className="text-xs text-muted-foreground mt-0.5">Newly joined workforce members across departments</p>
+              </div>
+              <Link to="/employees" className="text-xs text-primary font-bold hover:underline flex items-center gap-1">
+                View Directory <ChevronRight size={14} />
+              </Link>
+            </div>
+
+            <div className="space-y-2.5">
+              {recent_new_hires && recent_new_hires.length > 0 ? (
+                recent_new_hires.map((e: any) => (
+                  <Link
+                    key={e.id}
+                    to={`/employees/${e.id}`}
+                    className="p-3.5 rounded-2xl bg-background border border-border/80 flex items-center justify-between gap-3 hover:border-primary/40 hover:bg-accent/20 transition-all group"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-8 h-8 rounded-xl bg-primary/10 text-primary flex items-center justify-center font-bold text-xs shrink-0">
+                        {e.name?.charAt(0)}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-bold text-xs text-foreground group-hover:text-primary transition-colors truncate">
+                          {e.name}
+                        </div>
+                        <div className="text-[11px] text-muted-foreground truncate">
+                          {e.job_title} • {e.department}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <span className="text-[10px] font-mono text-muted-foreground block">{e.date_of_joining || 'Active'}</span>
+                      <span className="text-[9px] px-2 py-0.2 rounded-full font-bold bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
+                        {e.status}
+                      </span>
+                    </div>
+                  </Link>
+                ))
+              ) : (
+                <div className="p-8 text-center text-xs text-muted-foreground">
+                  No recent onboardings.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
 
-  const { metrics, department_distribution, recent_payruns, recent_payslips, recent_warnings } = data;
+  // ==========================================
+  // UNIFIED ADMIN / PAYROLL / GENERAL DASHBOARD VIEW
+  // ==========================================
+  if (!adminData) {
+    return (
+      <div className="p-8 text-center text-rose-500">
+        Failed to load dashboard data.
+      </div>
+    );
+  }
+
+  const { metrics, department_distribution } = adminData;
 
   const chartData = department_distribution.map((d: any) => ({
     name: d.code,
@@ -74,306 +453,128 @@ export default function Dashboard() {
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
       {/* Header Banner */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-gradient-to-r from-primary/10 via-primary/5 to-transparent p-6 rounded-2xl border border-primary/20">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-gradient-to-r from-primary/10 via-primary/5 to-transparent p-6 rounded-3xl border border-primary/20">
         <div>
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 mb-2">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            Indian Payroll System Live (FY 2026-27)
+            {isAdmin ? 'System Administrator Console' : isPayroll ? 'Payroll Department Workspace' : 'Employee Self-Service'}
           </span>
           <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-foreground">
-            Welcome to PeoplePay360
+            Welcome, {currentPersona.full_name}
           </h1>
-          <p className="text-sm text-muted-foreground mt-1">
+          <p className="text-xs md:text-sm text-muted-foreground mt-1">
             Enterprise Indian Payroll, Statutory Compliances (EPF, PT, TDS), and Workforce Management.
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <Link
-            to="/payroll/payruns"
-            className="flex items-center gap-2 px-4 py-2.5 bg-primary text-primary-foreground font-medium rounded-xl text-sm shadow-md shadow-primary/20 hover:bg-primary/90 transition-all"
-          >
-            <IndianRupee size={16} /> Run Payroll
-          </Link>
+          {(isAdmin || isPayroll) && (
+            <Link
+              to="/payroll/payruns"
+              className="flex items-center gap-2 px-4 py-2.5 bg-primary text-primary-foreground font-semibold rounded-xl text-xs shadow-md shadow-primary/20 hover:bg-primary/90 transition-all"
+            >
+              <IndianRupee size={15} /> Run Payroll
+            </Link>
+          )}
           <Link
             to="/employees"
-            className="flex items-center gap-2 px-4 py-2.5 bg-card hover:bg-accent text-foreground border border-border font-medium rounded-xl text-sm transition-all"
+            className="flex items-center gap-2 px-4 py-2.5 bg-card hover:bg-accent text-foreground border border-border font-semibold rounded-xl text-xs transition-all"
           >
-            <Users size={16} /> Directory
+            <Users size={15} /> Employees Directory
           </Link>
         </div>
       </div>
 
-      {/* KPI Metric Cards */}
+      {/* Metrics Row */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Total Employees */}
-        <div className="p-5 rounded-2xl bg-card border border-border hover:border-primary/40 transition-all shadow-sm">
+        {/* Total Monthly Wage Volume */}
+        <div className="p-6 rounded-3xl bg-card border border-border shadow-xs hover:border-primary/40 transition-all">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Total Workforce</span>
-            <div className="p-2.5 rounded-xl bg-blue-500/10 text-blue-500">
-              <Users size={20} />
+            <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Monthly Wage Volume</span>
+            <div className="p-2 rounded-xl bg-primary/10 text-primary">
+              <IndianRupee size={18} />
             </div>
           </div>
-          <div className="mt-4 flex items-baseline gap-2">
-            <span className="text-3xl font-bold text-foreground">{metrics.total_employees}</span>
-            <span className="text-xs font-medium text-emerald-500 flex items-center">
-              <TrendingUp size={12} className="mr-0.5" /> 100% active
-            </span>
+          <div className="mt-4 text-2xl font-extrabold text-foreground">
+            {formatINR(metrics.total_monthly_wage_volume)}
           </div>
-          <div className="mt-2 text-xs text-muted-foreground">
-            Across {department_distribution.length} Indian City Hubs
-          </div>
+          <span className="text-xs text-muted-foreground mt-1 block">
+            Annualized: {formatINRPerAnnum(metrics.total_monthly_wage_volume)}
+          </span>
         </div>
 
-        {/* Monthly Payroll */}
-        <div className="p-5 rounded-2xl bg-card border border-border hover:border-primary/40 transition-all shadow-sm">
+        {/* Total Workforce */}
+        <div className="p-6 rounded-3xl bg-card border border-border shadow-xs hover:border-primary/40 transition-all">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Monthly Payroll (INR)</span>
-            <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-500">
-              <IndianRupee size={20} />
+            <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Active Staff</span>
+            <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-500">
+              <Users size={18} />
             </div>
           </div>
-          <div className="mt-4 flex items-baseline gap-2">
-            <span className="text-3xl font-bold text-foreground">{formatINR(metrics.monthly_payroll_inr, true)}</span>
-            <span className="text-xs text-muted-foreground">/ month</span>
-          </div>
-          <div className="mt-2 text-xs text-muted-foreground">
-            Annualized: {formatINRPerAnnum(metrics.monthly_payroll_inr)}
-          </div>
+          <div className="mt-4 text-2xl font-extrabold text-emerald-500">{metrics.total_employees}</div>
+          <span className="text-xs text-muted-foreground mt-1 block">
+            100% contracts active & mapped
+          </span>
         </div>
 
-        {/* Today's Attendance */}
-        <div className="p-5 rounded-2xl bg-card border border-border hover:border-primary/40 transition-all shadow-sm">
+        {/* Attendance Today */}
+        <div className="p-6 rounded-3xl bg-card border border-border shadow-xs hover:border-primary/40 transition-all">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Attendance Rate</span>
-            <div className="p-2.5 rounded-xl bg-indigo-500/10 text-indigo-500">
-              <Clock size={20} />
+            <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Attendance Rate</span>
+            <div className="p-2 rounded-xl bg-blue-500/10 text-blue-500">
+              <Clock size={18} />
             </div>
           </div>
-          <div className="mt-4 flex items-baseline gap-2">
-            <span className="text-3xl font-bold text-foreground">{metrics.attendance_rate}%</span>
-            <span className="text-xs font-medium text-emerald-500">Normal</span>
-          </div>
-          <div className="mt-2 text-xs text-muted-foreground">
-            {metrics.punches_today} Biometric punches logged
-          </div>
+          <div className="mt-4 text-2xl font-extrabold text-blue-500">{metrics.attendance_rate}%</div>
+          <span className="text-xs text-muted-foreground mt-1 block">
+            {metrics.present_today} on-duty punches today
+          </span>
         </div>
 
-        {/* Active Payruns */}
-        <div className="p-5 rounded-2xl bg-card border border-border hover:border-primary/40 transition-all shadow-sm">
+        {/* Statutory Compliance Warnings */}
+        <div className="p-6 rounded-3xl bg-card border border-border shadow-xs hover:border-primary/40 transition-all">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Payruns & Compliance</span>
-            <div className="p-2.5 rounded-xl bg-purple-500/10 text-purple-500">
-              <FileCheck2 size={20} />
+            <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Payroll Warnings</span>
+            <div className="p-2 rounded-xl bg-amber-500/10 text-amber-500">
+              <AlertTriangle size={18} />
             </div>
           </div>
-          <div className="mt-4 flex items-baseline gap-2">
-            <span className="text-3xl font-bold text-foreground">{metrics.payruns_count} Cycles</span>
-            <span className="text-xs font-medium text-purple-500">EPF/PT Ready</span>
-          </div>
-          <div className="mt-2 text-xs text-muted-foreground">
-            {metrics.pending_leaves} Pending Leave Approvals
-          </div>
+          <div className="mt-4 text-2xl font-extrabold text-amber-500">{metrics.unresolved_warnings}</div>
+          <span className="text-xs text-muted-foreground mt-1 block">
+            {metrics.unresolved_warnings === 0 ? 'Compliances verified' : 'Needs attention'}
+          </span>
         </div>
       </div>
 
-      {/* Visual Charts & Department Spend */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Department Spend Bar Chart */}
-        <div className="lg:col-span-2 p-6 rounded-2xl bg-card border border-border">
-          <div className="flex items-center justify-between mb-6">
-            <div>
-              <h3 className="text-base font-semibold text-foreground">Monthly Payroll by Department (INR)</h3>
-              <p className="text-xs text-muted-foreground mt-0.5">Direct compensation allocation across functional teams</p>
-            </div>
-          </div>
-          <div className="h-64 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData} margin={{ top: 10, right: 10, left: 10, bottom: 20 }}>
-                <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
-                <XAxis dataKey="name" stroke="#888888" fontSize={12} tickLine={false} />
-                <YAxis
-                  stroke="#888888"
-                  fontSize={11}
-                  tickLine={false}
-                  tickFormatter={(val) => `₹${val / 1000}k`}
-                />
-                <Tooltip
-                  content={({ active, payload }) => {
-                    if (active && payload && payload.length) {
-                      const item = payload[0].payload;
-                      return (
-                        <div className="bg-popover border border-border p-3 rounded-xl shadow-lg text-xs space-y-1">
-                          <p className="font-semibold text-foreground">{item.fullName} ({item.name})</p>
-                          <p className="text-emerald-500 font-medium">Spend: {formatINR(item.monthlyWage)}</p>
-                          <p className="text-muted-foreground">Headcount: {item.employees} staff</p>
-                        </div>
-                      );
-                    }
-                    return null;
-                  }}
-                />
-                <Bar dataKey="monthlyWage" fill="#3B82F6" radius={[6, 6, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* Headcount Distribution Donut */}
-        <div className="p-6 rounded-2xl bg-card border border-border flex flex-col justify-between">
+      {/* Chart Section */}
+      <div className="p-6 rounded-3xl bg-card border border-border shadow-xs space-y-4">
+        <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-base font-semibold text-foreground">Headcount Breakdown</h3>
-            <p className="text-xs text-muted-foreground mt-0.5">Distribution across Indian hubs</p>
+            <h3 className="text-base font-bold text-foreground">Monthly CTC Distribution by Department</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">Aggregated wage volume and headcount across divisions</p>
           </div>
-          <div className="h-48 w-full my-2">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={chartData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={50}
-                  outerRadius={75}
-                  paddingAngle={4}
-                  dataKey="employees"
-                >
-                  {chartData.map((_item: any, index: number) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            {chartData.map((d: any, idx: number) => (
-              <div key={d.name} className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: COLORS[idx % COLORS.length] }}></span>
-                <span className="text-muted-foreground truncate">{d.name}:</span>
-                <span className="font-medium text-foreground">{d.employees}</span>
-              </div>
-            ))}
-          </div>
+        </div>
+
+        <div className="h-72 w-full pt-4">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={chartData} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" opacity={0.15} />
+              <XAxis dataKey="name" fontSize={11} stroke="currentColor" className="text-muted-foreground" />
+              <YAxis
+                tickFormatter={(val) => `₹${(val / 1000).toFixed(0)}k`}
+                fontSize={11}
+                stroke="currentColor"
+                className="text-muted-foreground"
+              />
+              <Tooltip
+                formatter={(val: any) => formatINR(val)}
+                contentStyle={{ backgroundColor: 'var(--card)', borderColor: 'var(--border)', borderRadius: '1rem', fontSize: '12px' }}
+                labelFormatter={(val) => chartData.find((d: any) => d.name === val)?.fullName || val}
+              />
+              <Bar dataKey="monthlyWage" name="Monthly CTC" fill="#6366F1" radius={[6, 6, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
         </div>
       </div>
-
-      {/* Tables Section: Recent Payruns & Payslips */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Recent Payrun Batches */}
-        <div className="p-6 rounded-2xl bg-card border border-border">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="text-base font-semibold text-foreground">Recent Payruns</h3>
-              <p className="text-xs text-muted-foreground">Monthly batch processing status</p>
-            </div>
-            <Link to="/payroll/payruns" className="text-xs font-medium text-primary hover:underline flex items-center gap-1">
-              View all <ChevronRight size={14} />
-            </Link>
-          </div>
-          <div className="space-y-3">
-            {recent_payruns.map((pr: any) => (
-              <div
-                key={pr.id}
-                className="p-4 rounded-xl bg-background border border-border/80 flex items-center justify-between hover:border-primary/30 transition-all"
-              >
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-sm text-foreground">{pr.name}</span>
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${getStatusBadgeClass(pr.status)}`}>
-                      {pr.status}
-                    </span>
-                  </div>
-                  <div className="text-xs text-muted-foreground flex items-center gap-3">
-                    <span>{pr.period}</span>
-                    <span>•</span>
-                    <span>{pr.payslips_count} Payslips</span>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className="text-sm font-bold text-foreground">
-                    {pr.total_net > 0 ? formatINR(pr.total_net) : 'Draft Cycle'}
-                  </div>
-                  <div className="text-[11px] text-muted-foreground">
-                    {pr.total_gross > 0 ? `Gross: ${formatINR(pr.total_gross, true)}` : 'Pending calculation'}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Recent Generated Payslips */}
-        <div className="p-6 rounded-2xl bg-card border border-border">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="text-base font-semibold text-foreground">Latest Payslips</h3>
-              <p className="text-xs text-muted-foreground">Generated INR salary slips</p>
-            </div>
-            <Link to="/payroll/payslips" className="text-xs font-medium text-primary hover:underline flex items-center gap-1">
-              View all <ChevronRight size={14} />
-            </Link>
-          </div>
-          <div className="space-y-3">
-            {recent_payslips.map((ps: any) => (
-              <Link
-                to={`/payroll/payslips/${ps.id}`}
-                key={ps.id}
-                className="p-3.5 rounded-xl bg-background border border-border/80 flex items-center justify-between hover:border-primary/40 hover:bg-accent/30 transition-all block"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold text-xs">
-                    {ps.employee_name.charAt(0)}
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium text-foreground">{ps.employee_name}</div>
-                    <div className="text-xs text-muted-foreground">{ps.employee_code} • {ps.payslip_number}</div>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className="text-sm font-semibold text-emerald-500">{formatINR(ps.net_wage)}</div>
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${getStatusBadgeClass(ps.status)}`}>
-                    {ps.status}
-                  </span>
-                </div>
-              </Link>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Compliance & Payroll Warnings */}
-      {recent_warnings.length > 0 && (
-        <div className="p-6 rounded-2xl bg-card border border-border">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="text-amber-500" size={18} />
-              <h3 className="text-base font-semibold text-foreground">Payroll Compliance & Action Items</h3>
-            </div>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {recent_warnings.map((w: any) => (
-              <div
-                key={w.id}
-                className="p-4 rounded-xl bg-background border border-amber-500/20 flex items-start gap-3"
-              >
-                <div className="p-2 rounded-lg bg-amber-500/10 text-amber-500 mt-0.5">
-                  <AlertTriangle size={16} />
-                </div>
-                <div className="flex-1 space-y-1">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-amber-500 uppercase tracking-wider">{w.type}</span>
-                    {w.is_resolved ? (
-                      <span className="text-xs text-emerald-500 flex items-center gap-1"><CheckCircle2 size={12}/> Resolved</span>
-                    ) : (
-                      <span className="text-xs text-amber-500 font-medium">Pending Review</span>
-                    )}
-                  </div>
-                  <p className="text-xs text-foreground/90">{w.message}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

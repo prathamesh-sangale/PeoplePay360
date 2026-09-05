@@ -1,18 +1,37 @@
 import { useState, useRef, useEffect } from 'react';
-import { Bell, Search, Check, ExternalLink, ShieldAlert, Calendar, DollarSign, UserCheck } from 'lucide-react';
+import {
+  Bell,
+  Search,
+  Check,
+  ExternalLink,
+  ShieldAlert,
+  Calendar,
+  DollarSign,
+  UserCheck,
+  ChevronDown,
+  Shield,
+  Briefcase,
+  User,
+  CheckCircle2,
+} from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getNotifications, markNotificationRead, markAllNotificationsRead } from '../../lib/api';
-import { Link } from 'react-router-dom';
+import { useRole, type UserPersona } from '../../context/RoleContext';
+import { Link, useNavigate } from 'react-router-dom';
 
 export default function Header() {
-  const [isOpen, setIsOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [isNotifOpen, setIsNotifOpen] = useState(false);
+  const [isRoleMenuOpen, setIsRoleMenuOpen] = useState(false);
+  const notifDropdownRef = useRef<HTMLDivElement>(null);
+  const roleDropdownRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const { currentPersona, currentRole, switchPersona, personas } = useRole();
 
   const { data: notifData } = useQuery({
     queryKey: ['notifications'],
     queryFn: getNotifications,
-    refetchInterval: 15000, // Live poll every 15s
+    refetchInterval: 15000,
   });
 
   const readMutation = useMutation({
@@ -31,11 +50,14 @@ export default function Header() {
     },
   });
 
-  // Close dropdown on outside click
+  // Close dropdowns on outside click
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
+      if (notifDropdownRef.current && !notifDropdownRef.current.contains(event.target as Node)) {
+        setIsNotifOpen(false);
+      }
+      if (roleDropdownRef.current && !roleDropdownRef.current.contains(event.target as Node)) {
+        setIsRoleMenuOpen(false);
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
@@ -58,11 +80,45 @@ export default function Header() {
     return <UserCheck size={14} className="text-primary" />;
   };
 
+  const getRoleIcon = (role: string) => {
+    switch (role) {
+      case 'ADMIN':
+        return <Shield size={14} className="text-indigo-500" />;
+      case 'HR':
+        return <Briefcase size={14} className="text-blue-500" />;
+      case 'PAYROLL':
+        return <DollarSign size={14} className="text-emerald-500" />;
+      case 'EMPLOYEE':
+        return <User size={14} className="text-amber-500" />;
+      default:
+        return <UserCheck size={14} className="text-primary" />;
+    }
+  };
+
+  const handlePersonaSwitch = (p: UserPersona) => {
+    switchPersona(p);
+    setIsRoleMenuOpen(false);
+    queryClient.invalidateQueries();
+    // Refresh to dashboard to present the updated role portal
+    navigate('/dashboard');
+  };
+
   return (
     <header className="h-16 flex items-center justify-between px-6 bg-card border-b border-border relative z-40">
       <div className="flex items-center gap-4">
-        <span className="text-sm text-muted-foreground font-medium">
+        <span className="text-sm text-muted-foreground font-medium hidden sm:inline">
           PeoplePay360 <span className="text-foreground/40">/</span> Enterprise Indian HR & Payroll
+        </span>
+        {/* Active Portal Badge */}
+        <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border ${currentPersona.badge_color}`}>
+          {getRoleIcon(currentRole)}
+          {currentRole === 'HR'
+            ? 'HR Portal'
+            : currentRole === 'PAYROLL'
+            ? 'Payroll Department'
+            : currentRole === 'ADMIN'
+            ? 'Admin Portal'
+            : 'Employee Self-Service'}
         </span>
       </div>
 
@@ -71,19 +127,19 @@ export default function Header() {
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <input
             type="text"
-            placeholder="Global search (Employees, Payslips)..."
-            className="h-9 w-64 rounded-xl border border-input bg-background px-9 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary text-foreground"
+            placeholder="Search employees, leaves, contracts..."
+            className="h-9 w-60 rounded-xl border border-input bg-background px-9 py-1 text-xs shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary text-foreground"
           />
         </div>
 
         {/* Interactive Notification Bell */}
-        <div className="relative" ref={dropdownRef}>
+        <div className="relative" ref={notifDropdownRef}>
           <button
-            onClick={() => setIsOpen(!isOpen)}
+            onClick={() => setIsNotifOpen(!isNotifOpen)}
             className="relative p-2.5 rounded-full hover:bg-accent/50 transition-colors text-foreground focus:outline-none"
             aria-label="Notifications"
           >
-            <Bell size={20} />
+            <Bell size={18} />
             {unreadCount > 0 && (
               <span className="absolute top-1 right-1 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white shadow-sm ring-2 ring-card animate-pulse">
                 {unreadCount > 9 ? '9+' : unreadCount}
@@ -92,13 +148,13 @@ export default function Header() {
           </button>
 
           {/* Dropdown Popup */}
-          {isOpen && (
+          {isNotifOpen && (
             <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl bg-card border border-border shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200 z-50">
               <div className="p-4 border-b border-border flex items-center justify-between bg-accent/20">
                 <div className="flex items-center gap-2">
                   <h3 className="font-bold text-sm text-foreground">Notifications</h3>
                   {unreadCount > 0 && (
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-primary/10 text-primary border border-primary/20">
+                    <span className="px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-500 text-xs font-semibold border border-rose-500/20">
                       {unreadCount} new
                     </span>
                   )}
@@ -106,17 +162,18 @@ export default function Header() {
                 {unreadCount > 0 && (
                   <button
                     onClick={() => readAllMutation.mutate()}
-                    className="text-xs text-primary hover:underline font-semibold flex items-center gap-1"
+                    className="text-xs text-primary hover:underline font-medium"
                   >
-                    <Check size={12} /> Mark all read
+                    Mark all read
                   </button>
                 )}
               </div>
 
-              <div className="max-h-80 overflow-y-auto divide-y divide-border/50">
+              <div className="max-h-[360px] overflow-y-auto divide-y divide-border/60">
                 {items.length === 0 ? (
-                  <div className="p-6 text-center text-xs text-muted-foreground">
-                    No notifications at this time.
+                  <div className="p-8 text-center text-xs text-muted-foreground">
+                    <CheckCircle2 size={24} className="mx-auto text-emerald-500 mb-2 opacity-80" />
+                    All caught up! No notifications.
                   </div>
                 ) : (
                   items.slice(0, 6).map((n: any) => (
@@ -159,7 +216,7 @@ export default function Header() {
               <div className="p-3 border-t border-border bg-accent/10 text-center">
                 <Link
                   to="/notifications"
-                  onClick={() => setIsOpen(false)}
+                  onClick={() => setIsNotifOpen(false)}
                   className="text-xs text-primary font-semibold hover:underline inline-flex items-center gap-1"
                 >
                   View all alerts & history <ExternalLink size={12} />
@@ -169,14 +226,76 @@ export default function Header() {
           )}
         </div>
 
-        <div className="flex items-center gap-2 p-1 pl-2 pr-3 rounded-full hover:bg-accent/50 transition-colors border border-border bg-background">
-          <div className="h-7 w-7 rounded-full bg-primary flex items-center justify-center text-xs font-bold text-primary-foreground shadow-sm">
-            AS
-          </div>
-          <div className="text-left hidden sm:block">
-            <span className="text-xs font-bold text-foreground block leading-tight">Aarav Sharma</span>
-            <span className="text-[10px] text-muted-foreground block leading-tight">Super Admin</span>
-          </div>
+        {/* Interactive Persona Switcher Dropdown */}
+        <div className="relative" ref={roleDropdownRef}>
+          <button
+            onClick={() => setIsRoleMenuOpen(!isRoleMenuOpen)}
+            className="flex items-center gap-2 p-1.5 pl-2.5 pr-3 rounded-2xl hover:bg-accent/50 transition-all border border-border bg-card shadow-xs focus:outline-none"
+          >
+            <div className="h-7 w-7 rounded-xl bg-gradient-to-tr from-primary to-indigo-600 flex items-center justify-center text-xs font-bold text-primary-foreground shadow-xs">
+              {currentPersona.avatar_initials}
+            </div>
+            <div className="text-left hidden sm:block">
+              <span className="text-xs font-bold text-foreground block leading-tight">
+                {currentPersona.full_name}
+              </span>
+              <span className="text-[10px] text-muted-foreground block leading-tight flex items-center gap-1">
+                {currentPersona.display_title}
+              </span>
+            </div>
+            <ChevronDown size={14} className="text-muted-foreground ml-1" />
+          </button>
+
+          {isRoleMenuOpen && (
+            <div className="absolute right-0 mt-2 w-80 rounded-2xl bg-card border border-border shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200 z-50 p-2">
+              <div className="p-3 border-b border-border bg-accent/20 rounded-xl mb-2">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                  Switch Role Persona (Testing & Demo)
+                </div>
+                <div className="text-xs text-muted-foreground mt-0.5">
+                  Select a persona to test role-specific dashboards, permissions, and sidebar navigation.
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                {personas.map((p) => {
+                  const isSelected = p.role === currentRole;
+                  return (
+                    <div
+                      key={p.role}
+                      onClick={() => handlePersonaSwitch(p)}
+                      className={`p-3 rounded-xl cursor-pointer transition-all flex items-start justify-between gap-2.5 ${
+                        isSelected
+                          ? 'bg-primary/10 border border-primary/30 text-foreground shadow-xs'
+                          : 'hover:bg-accent/40 text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      <div className="flex items-start gap-2.5">
+                        <div className="h-8 w-8 rounded-xl bg-background border border-border flex items-center justify-center text-xs font-bold text-foreground shrink-0 shadow-xs mt-0.5">
+                          {p.avatar_initials}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-bold text-foreground">{p.full_name}</span>
+                            <span className={`text-[9px] px-1.5 py-0.2 rounded-full font-bold border ${p.badge_color}`}>
+                              {p.role}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-muted-foreground font-medium">{p.display_title}</div>
+                          <div className="text-[10px] text-muted-foreground/80 mt-0.5 line-clamp-1">{p.description}</div>
+                        </div>
+                      </div>
+                      {isSelected && (
+                        <div className="text-primary mt-1 shrink-0">
+                          <CheckCircle2 size={16} />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </header>

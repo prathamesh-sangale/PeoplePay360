@@ -61,3 +61,16 @@ class User(Base):
     notifications: Mapped[List[Notification]] = relationship(
         "Notification", back_populates="user", cascade="all, delete-orphan"
     )
+
+    @property
+    def normalized_role(self) -> str:
+        if hasattr(self, "_normalized_role") and self._normalized_role:
+            return self._normalized_role
+        if self.role and hasattr(self.role, "name") and self.role.name:
+            from app.auth.rbac import normalize_role_name
+            return normalize_role_name(self.role.name)
+        return "ADMIN"
+
+    @normalized_role.setter
+    def normalized_role(self, value: str):
+        self._normalized_role = value

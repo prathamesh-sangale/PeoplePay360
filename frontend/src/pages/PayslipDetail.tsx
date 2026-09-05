@@ -2,7 +2,7 @@ import { useParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { getPayslipDetail } from '../lib/api';
 import { formatINR, getStatusBadgeClass } from '../lib/formatters';
-import { ArrowLeft, Printer, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, Printer, ShieldCheck, CalendarDays, TrendingDown } from 'lucide-react';
 
 export default function PayslipDetail() {
   const { id } = useParams();
@@ -31,6 +31,14 @@ export default function PayslipDetail() {
       </div>
     );
   }
+
+  const recon = slip.attendance_reconciliation || {
+    working_days: slip.employee?.working_days || 22,
+    worked_days: slip.employee?.worked_days || 22,
+    paid_leave_days: slip.employee?.paid_leave_days || 0,
+    lop_days: slip.employee?.lop_days || 0,
+    lop_deduction: slip.employee?.lop_deduction || 0,
+  };
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto animate-in fade-in duration-300">
@@ -89,7 +97,7 @@ export default function PayslipDetail() {
           </div>
           <div>
             <span className="text-muted-foreground block text-[11px]">Work Location</span>
-            <span className="font-semibold text-foreground">{slip.employee?.location || 'Bangalore'}</span>
+            <span className="font-semibold text-foreground">{slip.employee?.location || 'Bengaluru'}</span>
           </div>
           <div>
             <span className="text-muted-foreground block text-[11px]">Contract Reference</span>
@@ -107,6 +115,42 @@ export default function PayslipDetail() {
             <span className="text-muted-foreground block text-[11px]">Currency</span>
             <span className="font-bold text-foreground">INR (₹)</span>
           </div>
+        </div>
+
+        {/* ATTENDANCE & LEAVE RECONCILIATION */}
+        <div className="p-4 rounded-2xl bg-gradient-to-r from-primary/5 via-primary/10 to-transparent border border-primary/20 space-y-3">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-primary flex items-center gap-1.5">
+              <CalendarDays size={14} /> Attendance & Leave Reconciliation
+            </h4>
+            <span className="text-[11px] text-muted-foreground">Monthly Statutory Time Register</span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            <div className="p-3 rounded-xl bg-card border border-border space-y-0.5">
+              <span className="text-[11px] text-muted-foreground">Working Days</span>
+              <div className="text-base font-bold text-foreground">{recon.working_days} days</div>
+            </div>
+            <div className="p-3 rounded-xl bg-card border border-border space-y-0.5">
+              <span className="text-[11px] text-muted-foreground">Worked / Payable Days</span>
+              <div className="text-base font-bold text-emerald-500">{recon.worked_days} days</div>
+            </div>
+            <div className="p-3 rounded-xl bg-card border border-border space-y-0.5">
+              <span className="text-[11px] text-muted-foreground">Paid Leave (CL/PL/SL)</span>
+              <div className="text-base font-bold text-blue-500">{recon.paid_leave_days} days</div>
+            </div>
+            <div className="p-3 rounded-xl bg-card border border-border space-y-0.5">
+              <span className="text-[11px] text-muted-foreground">Unpaid Leave (LOP)</span>
+              <div className={`text-base font-bold ${recon.lop_days > 0 ? 'text-rose-500' : 'text-foreground'}`}>
+                {recon.lop_days} days
+              </div>
+            </div>
+          </div>
+          {recon.lop_days > 0 && (
+            <div className="text-[11px] text-rose-500 font-medium flex items-center gap-1 pt-1 border-t border-border/60">
+              <TrendingDown size={13} />
+              Loss of Pay (LOP) Deduction: -{formatINR(recon.lop_deduction)} applied for {recon.lop_days} unpaid days.
+            </div>
+          )}
         </div>
 
         {/* 2-Column Earnings & Deductions Breakdown */}
@@ -134,14 +178,16 @@ export default function PayslipDetail() {
           {/* Deductions (Right) */}
           <div className="space-y-3">
             <div className="flex items-center justify-between pb-2 border-b border-border">
-              <h4 className="text-xs font-bold uppercase tracking-wider text-rose-500">Statutory Deductions</h4>
+              <h4 className="text-xs font-bold uppercase tracking-wider text-rose-500">Statutory Deductions & LOP</h4>
               <span className="text-xs font-bold text-muted-foreground">Amount (INR)</span>
             </div>
             <div className="space-y-2 text-xs">
               {slip.deductions?.map((d: any) => (
                 <div key={d.id} className="flex justify-between py-1 border-b border-border/40">
-                  <span className="text-foreground font-medium">{d.rule_name}</span>
-                  <span className="font-mono text-rose-500 font-semibold">{formatINR(d.amount)}</span>
+                  <span className={`font-medium ${d.rule_code === 'LOP' ? 'text-rose-500 font-bold' : 'text-foreground'}`}>
+                    {d.rule_name}
+                  </span>
+                  <span className="font-mono text-rose-500 font-semibold">-{formatINR(d.amount)}</span>
                 </div>
               ))}
             </div>

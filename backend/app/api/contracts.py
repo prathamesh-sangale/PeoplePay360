@@ -102,3 +102,115 @@ def get_contract_detail(id: str, db: Session = Depends(get_db)):
         "working_schedule": sched.name if sched else "Standard Tech Shift",
         "hours_per_week": float(sched.weekly_hours) if sched else 40.0,
     }
+
+
+from pydantic import BaseModel
+from datetime import date
+from app.auth.rbac import require_role
+
+
+class ContractCreate(BaseModel):
+    employee_id: int
+    contract_number: Optional[str] = None
+    wage: float
+    start_date: date
+    end_date: Optional[date] = None
+    salary_structure_id: Optional[int] = None
+    working_schedule_id: Optional[int] = None
+    status: str = "ACTIVE"
+
+
+class ContractUpdate(BaseModel):
+    wage: Optional[float] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    salary_structure_id: Optional[int] = None
+    working_schedule_id: Optional[int] = None
+    status: Optional[str] = None
+
+
+@router.post("", dependencies=[Depends(require_role("HR", "ADMIN"))])
+def create_contract(payload: ContractCreate, db: Session = Depends(get_db)):
+    """
+    Creates a new contract for an employee without destroying historical records.
+    Requires HR or ADMIN role.
+    """
+    emp = db.query(Employee).filter(Employee.id == payload.employee_id).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    c_num = payload.contract_number
+    if not c_num:
+        count = db.query(Contract).filter(Contract.employee_id == emp.id).count()
+        c_num = f"CON-{emp.employee_code}-{(count + 1):02d}"
+
+    struct_id = payload.salary_structure_id
+    if not struct_id:
+        first_struct = db.query(SalaryStructure).first()
+        struct_id = first_struct.id if first_struct else 1
+
+    sched_id = payload.working_schedule_id
+    if not sched_id:
+        first_sched = db.query(WorkingSchedule).first()
+        sched_id = first_sched.id if first_sched else 1
+
+    if payload.status.upper() == "ACTIVE":
+        # Mark other active contracts as EXPIRED/SUPERSEDED to maintain clear single active contract
+        db.query(Contract).filter(
+            Contract.employee_id == emp.id,
+            Contract.status == "ACTIVE"
+        ).update({"status": "EXPIRED"})
+
+    new_contract = Contract(
+        employee_id=emp.id,
+        department_id=emp.department_id,
+        job_id=emp.job_id,
+        salary_structure_id=struct_id,
+        working_schedule_id=sched_id,
+        contract_number=c_num,
+        wage=payload.wage,
+        start_date=payload.start_date,
+        end_date=payload.end_date,
+        status=payload.status.upper(),
+    )
+    db.add(new_contract)
+    db.commit()
+    db.refresh(new_contract)
+
+    return {
+        "status": "success",
+        "message": f"Contract '{new_contract.contract_number}' registered successfully.",
+        "id": str(new_contract.id),
+        "contract_number": new_contract.contract_number,
+    }
+
+
+@router.put("/{id}", dependencies=[Depends(require_role("HR", "ADMIN"))])
+def update_contract(id: int, payload: ContractUpdate, db: Session = Depends(get_db)):
+    """Updates contract terms. Requires HR or ADMIN role."""
+    c = db.query(Contract).filter(Contract.id == id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Contract not found")
+
+    if payload.wage is not None:
+        c.wage = payload.wage
+    if payload.start_date is not None:
+        c.start_date = payload.start_date
+    if payload.end_date is not None:
+        c.end_date = payload.end_date
+    if payload.salary_structure_id is not None:
+        c.salary_structure_id = payload.salary_structure_id
+    if payload.working_schedule_id is not None:
+        c.working_schedule_id = payload.working_schedule_id
+    if payload.status is not None:
+        c.status = payload.status.upper()
+
+    db.commit()
+    db.refresh(c)
+
+    return {
+        "status": "success",
+        "message": f"Contract '{c.contract_number}' updated successfully.",
+        "id": str(c.id),
+    }
+

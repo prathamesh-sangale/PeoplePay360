@@ -554,6 +554,7 @@ def seed_database():
             SalaryRule(name="Professional Tax (PT)", code="PT", category="DEDUCTION", sequence=120, calculation_type="FIXED", percentage=None, amount=Decimal("200.00"), formula=None, description="State Government Professional Tax (₹200/mo)"),
             SalaryRule(name="Tax Deducted at Source (TDS Sec 192)", code="TDS", category="DEDUCTION", sequence=130, calculation_type="PERCENTAGE", percentage=Decimal("10.0000"), amount=None, formula="Monthly Income Tax Withholding", description="TDS under Income Tax Act Section 192"),
             SalaryRule(name="Professional TDS (Section 194J)", code="TDS_194J", category="DEDUCTION", sequence=135, calculation_type="PERCENTAGE", percentage=Decimal("10.0000"), amount=None, formula="10% flat withholding on professional fees", description="TDS under Section 194J for Retainers"),
+            SalaryRule(name="Loss of Pay (LOP) Deduction", code="LOP", category="DEDUCTION", sequence=140, calculation_type="FORMULA", percentage=None, amount=None, formula="(BASIC / WORKING_DAYS) * LOP_DAYS", description="Statutory Loss of Pay deduction for approved unpaid absences"),
             SalaryRule(name="Total Deductions", code="TOTAL_DED", category="DEDUCTION", sequence=190, calculation_type="FORMULA", percentage=None, amount=None, formula="SUM(DEDUCTIONS)", description="Sum of monthly deductions"),
             
             # Net & Employer
@@ -696,11 +697,12 @@ def seed_database():
         print("[10/14] Seeding Indian Leave Types, Varied Allocations & Requests (Approved, Pending, Refused)...")
         
         time_off_types_data = [
-            TimeOffType(name="Casual Leave (CL)", code="CL", unit="DAYS", allocation_required=True, approval_required=True, payroll_integration=True, is_active=True, description="Paid casual leave for personal commitments"),
-            TimeOffType(name="Privilege / Earned Leave (PL)", code="PL", unit="DAYS", allocation_required=True, approval_required=True, payroll_integration=True, is_active=True, description="Earned leave accumulated per working month"),
-            TimeOffType(name="Sick Leave (SL)", code="SL", unit="DAYS", allocation_required=True, approval_required=True, payroll_integration=True, is_active=True, description="Medical sick leave"),
+            TimeOffType(name="Casual Leave (CL)", code="CL", unit="DAYS", allocation_required=True, approval_required=True, payroll_integration=False, is_active=True, description="Paid casual leave for personal commitments"),
+            TimeOffType(name="Privilege / Earned Leave (PL)", code="PL", unit="DAYS", allocation_required=True, approval_required=True, payroll_integration=False, is_active=True, description="Earned leave accumulated per working month"),
+            TimeOffType(name="Sick Leave (SL)", code="SL", unit="DAYS", allocation_required=True, approval_required=True, payroll_integration=False, is_active=True, description="Medical sick leave"),
+            TimeOffType(name="Unpaid Leave / Loss of Pay (LOP)", code="UNPAID", unit="DAYS", allocation_required=False, approval_required=True, payroll_integration=True, is_active=True, description="Unpaid leave / Loss of Pay impacting monthly payroll computation"),
             TimeOffType(name="Maternity Leave (ML)", code="ML", unit="DAYS", allocation_required=False, approval_required=True, payroll_integration=True, is_active=True, description="26 weeks statutory maternity benefit"),
-            TimeOffType(name="Optional / Festival Holiday", code="FEST_HOL", unit="DAYS", allocation_required=True, approval_required=True, payroll_integration=True, is_active=True, description="Optional religious and festival holidays"),
+            TimeOffType(name="Optional / Festival Holiday", code="FEST_HOL", unit="DAYS", allocation_required=True, approval_required=True, payroll_integration=False, is_active=True, description="Optional religious and festival holidays"),
         ]
         session.add_all(time_off_types_data)
         session.flush()
@@ -776,7 +778,8 @@ def seed_database():
             tt = [t for t in time_off_types_data if t.id == a.time_off_type_id][0]
             alloc_map[(a.employee_id, tt.code)] = a
 
-        # Diverse leave requests (APPROVED, PENDING, REFUSED, CANCELLED)
+        # Diverse leave requests (APPROVED, PENDING, REFUSED, CANCELLED across PL, CL, SL, UNPAID)
+        unpaid_tt = time_off_types_data[3]
         leave_requests = [
             # 1. APPROVED (Casual Leave) - Ananya Iyer
             TimeOffRequest(
@@ -804,7 +807,46 @@ def seed_database():
                 approved_by_user_id=admin_user.id,
                 approved_at=datetime(2026, 8, 12, 11, 15),
             ),
-            # 3. PENDING (Sick Leave) - Karthik Reddy
+            # 3. APPROVED (Sick Leave) - Rohan Sharma
+            TimeOffRequest(
+                employee_id=created_employees[2].id,
+                time_off_type_id=time_off_types_data[2].id,
+                allocation_id=alloc_map[(created_employees[2].id, "SL")].id,
+                start_date=date(2026, 8, 10),
+                end_date=date(2026, 8, 11),
+                requested_amount=Decimal("2.00"),
+                reason="Viral gastroenteritis recovery prescribed by doctor",
+                status="APPROVED",
+                approved_by_user_id=admin_user.id,
+                approved_at=datetime(2026, 8, 10, 9, 30),
+            ),
+            # 4. APPROVED (Unpaid Leave / LOP) - Kavita Krishnan (2 days in August - Impacts Aug Payroll)
+            TimeOffRequest(
+                employee_id=created_employees[8].id,
+                time_off_type_id=unpaid_tt.id,
+                allocation_id=None,
+                start_date=date(2026, 8, 18),
+                end_date=date(2026, 8, 19),
+                requested_amount=Decimal("2.00"),
+                reason="Unplanned family emergency beyond allocated casual leave",
+                status="APPROVED",
+                approved_by_user_id=admin_user.id,
+                approved_at=datetime(2026, 8, 17, 18, 0),
+            ),
+            # 5. APPROVED (Unpaid Leave / LOP) - Aditya Verma (Aug 30 -> Sep 1: Cross-Period Boundary)
+            TimeOffRequest(
+                employee_id=created_employees[5].id,
+                time_off_type_id=unpaid_tt.id,
+                allocation_id=None,
+                start_date=date(2026, 8, 30),
+                end_date=date(2026, 9, 1),
+                requested_amount=Decimal("3.00"),
+                reason="Extended international transit delay",
+                status="APPROVED",
+                approved_by_user_id=admin_user.id,
+                approved_at=datetime(2026, 8, 29, 14, 0),
+            ),
+            # 6. PENDING (Sick Leave) - Karthik Reddy
             TimeOffRequest(
                 employee_id=created_employees[9].id,
                 time_off_type_id=time_off_types_data[2].id,
@@ -812,12 +854,12 @@ def seed_database():
                 start_date=date(2026, 9, 2),
                 end_date=date(2026, 9, 3),
                 requested_amount=Decimal("2.00"),
-                reason="Viral fever and recovery prescribed by doctor",
+                reason="Seasonal viral flu checkup",
                 status="PENDING",
                 approved_by_user_id=None,
                 approved_at=None,
             ),
-            # 4. PENDING (Casual Leave) - Pooja Deshmukh
+            # 7. PENDING (Casual Leave) - Pooja Deshmukh
             TimeOffRequest(
                 employee_id=created_employees[10].id,
                 time_off_type_id=time_off_types_data[0].id,
@@ -830,21 +872,48 @@ def seed_database():
                 approved_by_user_id=None,
                 approved_at=None,
             ),
-            # 5. REFUSED (Privilege Leave) - Aditya Verma
+            # 8. PENDING (Unpaid Leave / LOP) - Sneha Roy
             TimeOffRequest(
-                employee_id=created_employees[5].id,
+                employee_id=created_employees[3].id,
+                time_off_type_id=unpaid_tt.id,
+                allocation_id=None,
+                start_date=date(2026, 9, 15),
+                end_date=date(2026, 9, 16),
+                requested_amount=Decimal("2.00"),
+                reason="Personal property documentation registration",
+                status="PENDING",
+                approved_by_user_id=None,
+                approved_at=None,
+            ),
+            # 9. REFUSED (Privilege Leave) - Vikramaditya Singh
+            TimeOffRequest(
+                employee_id=created_employees[0].id,
                 time_off_type_id=time_off_types_data[1].id,
-                allocation_id=alloc_map[(created_employees[5].id, "PL")].id,
+                allocation_id=alloc_map[(created_employees[0].id, "PL")].id,
                 start_date=date(2026, 8, 28),
                 end_date=date(2026, 8, 30),
                 requested_amount=Decimal("3.00"),
-                reason="Quarter-end sales holiday trip",
+                reason="Vacation trip during major client go-live sprint",
                 status="REFUSED",
                 approved_by_user_id=admin_user.id,
                 refused_at=datetime(2026, 8, 25, 16, 0),
-                refusal_reason="Critical Q2 Enterprise deal closure week. All sales directors required on-site.",
+                refusal_reason="Critical Q2 Enterprise deliverable go-live milestone week.",
             ),
-            # 6. CANCELLED (Casual Leave) - Sneha Mukherjee
+            # 10. REFUSED (Unpaid Leave) - Manish Gupta
+            TimeOffRequest(
+                employee_id=created_employees[11].id,
+                time_off_type_id=unpaid_tt.id,
+                allocation_id=None,
+                start_date=date(2026, 8, 24),
+                end_date=date(2026, 8, 27),
+                requested_amount=Decimal("4.00"),
+                reason="Personal leisure travel extension",
+                status="REFUSED",
+                approved_by_user_id=admin_user.id,
+                refused_at=datetime(2026, 8, 22, 10, 0),
+                refusal_reason="Insufficient sprint coverage for operations shift roster.",
+            ),
+            # 11. CANCELLED (Casual Leave) - Sneha Mukherjee
             TimeOffRequest(
                 employee_id=created_employees[8].id,
                 time_off_type_id=time_off_types_data[0].id,
@@ -852,7 +921,7 @@ def seed_database():
                 start_date=date(2026, 8, 5),
                 end_date=date(2026, 8, 5),
                 requested_amount=Decimal("1.00"),
-                reason="Home maintenance appointment",
+                reason="Home maintenance appointment postponed",
                 status="CANCELLED",
                 approved_by_user_id=None,
                 approved_at=None,
@@ -1092,8 +1161,8 @@ def seed_database():
         # -------------------------------------------------------------
         print("[13/14] Generating Itemized Payslips & Accurate Rule Lines in INR...")
         
-        # Helper to compute breakdown lines for an employee based on their contract and salary structure
-        def generate_payslip_breakdown(payslip_id, contract_wage, struct_id):
+        # Helper to compute breakdown lines for an employee based on their contract, salary structure, and LOP days
+        def generate_payslip_breakdown(payslip_id, contract_wage, struct_id, lop_days=Decimal("0.00")):
             lines = []
             wage = contract_wage
             
@@ -1121,7 +1190,7 @@ def seed_database():
                     PayslipLine(payslip_id=payslip_id, salary_rule_id=rules_by_code["PT"].id, name="Professional Tax", code="PT", category="DEDUCTION", sequence=120, calculation_type="FIXED", quantity=Decimal("1.00"), rate=None, base_amount=pt, amount=pt, formula_snapshot="State PT Act (INR 200)"),
                     PayslipLine(payslip_id=payslip_id, salary_rule_id=rules_by_code["TDS"].id, name="Tax Deducted at Source (TDS)", code="TDS", category="DEDUCTION", sequence=130, calculation_type="PERCENTAGE", quantity=Decimal("1.00"), rate=Decimal("18.00"), base_amount=gross, amount=tds, formula_snapshot="Income Tax Withholding Sec 192"),
                 ]
-                return basic, gross, total_ded, epf, net, lines
+                epf_er = epf
 
             # 2. Structure: Sales
             elif struct_id == struct_sales.id:
@@ -1147,7 +1216,7 @@ def seed_database():
                     PayslipLine(payslip_id=payslip_id, salary_rule_id=rules_by_code["PT"].id, name="Professional Tax", code="PT", category="DEDUCTION", sequence=120, calculation_type="FIXED", quantity=Decimal("1.00"), rate=None, base_amount=pt, amount=pt, formula_snapshot="State PT Act (INR 200)"),
                     PayslipLine(payslip_id=payslip_id, salary_rule_id=rules_by_code["TDS"].id, name="Tax Deducted at Source (TDS)", code="TDS", category="DEDUCTION", sequence=130, calculation_type="PERCENTAGE", quantity=Decimal("1.00"), rate=Decimal("12.00"), base_amount=gross, amount=tds, formula_snapshot="TDS Sec 192"),
                 ]
-                return basic, gross, total_ded, epf, net, lines
+                epf_er = epf
 
             # 3. Structure: Operations
             elif struct_id == struct_ops.id:
@@ -1173,7 +1242,7 @@ def seed_database():
                     PayslipLine(payslip_id=payslip_id, salary_rule_id=rules_by_code["PT"].id, name="Professional Tax", code="PT", category="DEDUCTION", sequence=120, calculation_type="FIXED", quantity=Decimal("1.00"), rate=None, base_amount=pt, amount=pt, formula_snapshot="State PT Act (INR 200)"),
                     PayslipLine(payslip_id=payslip_id, salary_rule_id=rules_by_code["TDS"].id, name="Tax Deducted at Source (TDS)", code="TDS", category="DEDUCTION", sequence=130, calculation_type="PERCENTAGE", quantity=Decimal("1.00"), rate=Decimal("5.00"), base_amount=gross, amount=tds, formula_snapshot="TDS Sec 192"),
                 ]
-                return basic, gross, total_ded, epf, net, lines
+                epf_er = epf
 
             # 4. Structure: Consultant 194J
             elif struct_id == struct_consult.id:
@@ -1187,7 +1256,7 @@ def seed_database():
                     PayslipLine(payslip_id=payslip_id, salary_rule_id=rules_by_code["BASIC"].id, name="Professional Retainer Fee", code="BASIC", category="BASIC", sequence=10, calculation_type="FIXED", quantity=Decimal("1.00"), rate=None, base_amount=wage, amount=basic, formula_snapshot="Monthly Contract Retainer Fee"),
                     PayslipLine(payslip_id=payslip_id, salary_rule_id=rules_by_code["TDS_194J"].id, name="TDS under Section 194J (10%)", code="TDS_194J", category="DEDUCTION", sequence=135, calculation_type="PERCENTAGE", quantity=Decimal("1.00"), rate=Decimal("10.00"), base_amount=gross, amount=tds_194j, formula_snapshot="10% Withholding Sec 194J"),
                 ]
-                return basic, gross, total_ded, Decimal("0.00"), net, lines
+                epf_er = Decimal("0.00")
 
             # 5. Structure: Intern Stipend
             elif struct_id == struct_intern.id:
@@ -1199,7 +1268,7 @@ def seed_database():
                 lines = [
                     PayslipLine(payslip_id=payslip_id, salary_rule_id=rules_by_code["BASIC"].id, name="Graduate Trainee Monthly Stipend", code="BASIC", category="BASIC", sequence=10, calculation_type="FIXED", quantity=Decimal("1.00"), rate=None, base_amount=wage, amount=basic, formula_snapshot="Fixed Monthly Stipend"),
                 ]
-                return basic, gross, total_ded, Decimal("0.00"), net, lines
+                epf_er = Decimal("0.00")
 
             # 6. Default Structure: Standard Tech
             else:
@@ -1225,7 +1294,31 @@ def seed_database():
                     PayslipLine(payslip_id=payslip_id, salary_rule_id=rules_by_code["PT"].id, name="Professional Tax", code="PT", category="DEDUCTION", sequence=120, calculation_type="FIXED", quantity=Decimal("1.00"), rate=None, base_amount=pt, amount=pt, formula_snapshot="State PT Act (INR 200)"),
                     PayslipLine(payslip_id=payslip_id, salary_rule_id=rules_by_code["TDS"].id, name="Tax Deducted at Source (TDS)", code="TDS", category="DEDUCTION", sequence=130, calculation_type="PERCENTAGE", quantity=Decimal("1.00"), rate=Decimal("10.00"), base_amount=gross, amount=tds, formula_snapshot="Income Tax Withholding Sec 192"),
                 ]
-                return basic, gross, total_ded, epf, net, lines
+                epf_er = epf
+
+            # If LOP days exist, apply LOP deduction
+            if lop_days > Decimal("0.00"):
+                lop_amt = ((basic / Decimal("22.00")) * lop_days).quantize(Decimal("0.01"))
+                lines.append(
+                    PayslipLine(
+                        payslip_id=payslip_id,
+                        salary_rule_id=rules_by_code["LOP"].id,
+                        name=f"Loss of Pay ({lop_days} days LOP)",
+                        code="LOP",
+                        category="DEDUCTION",
+                        sequence=140,
+                        calculation_type="FORMULA",
+                        quantity=lop_days,
+                        rate=None,
+                        base_amount=basic,
+                        amount=lop_amt,
+                        formula_snapshot=f"(Basic / 22 working days) * {lop_days} LOP days",
+                    )
+                )
+                total_ded += lop_amt
+                net -= lop_amt
+
+            return basic, gross, total_ded, epf_er, net, lines
 
         # Populate payslips for July 2026, August 2026, and June 2026
         all_payslip_lines = []
@@ -1237,6 +1330,16 @@ def seed_database():
             for emp in created_employees:
                 contract = active_contracts_map[emp.id]
                 
+                # Check for approved LOP in this payrun period
+                emp_lop = Decimal("0.00")
+                if pr == pr_aug:
+                    if emp.id == created_employees[8].id:  # Kavita Krishnan (2 days LOP Aug 18-19)
+                        emp_lop = Decimal("2.00")
+                    elif emp.id == created_employees[5].id:  # Aditya Verma (1 working day overlap in Aug: Aug 30-31)
+                        emp_lop = Decimal("1.00")
+
+                worked_d = max(Decimal("0.00"), Decimal("22.00") - emp_lop)
+
                 # Payrun Employee roster entry
                 pe = PayrunEmployee(
                     payrun_id=pr.id,
@@ -1246,7 +1349,6 @@ def seed_database():
                 session.add(pe)
                 session.flush()
 
-                # Dummy dummy placeholder payslip to get ID
                 ps = Payslip(
                     payrun_id=pr.id,
                     employee_id=emp.id,
@@ -1255,7 +1357,7 @@ def seed_database():
                     contract_id=contract.id,
                     period_start=p_start,
                     period_end=p_end,
-                    worked_days=Decimal("22.00"),
+                    worked_days=worked_d,
                     basic_amount=Decimal("0.00"),
                     gross_amount=Decimal("0.00"),
                     deduction_amount=Decimal("0.00"),
@@ -1269,7 +1371,7 @@ def seed_database():
                 session.flush()
 
                 basic, gross, total_ded, epf_er, net, lines = generate_payslip_breakdown(
-                    ps.id, contract.wage, contract.salary_structure_id
+                    ps.id, contract.wage, contract.salary_structure_id, lop_days=emp_lop
                 )
                 
                 ps.basic_amount = basic
