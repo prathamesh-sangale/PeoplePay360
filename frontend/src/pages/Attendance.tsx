@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getAttendance, getAttendanceSummary } from '../lib/api';
-import { getStatusBadgeClass } from '../lib/formatters';
+import { getStatusBadgeClass, formatTime12Hour } from '../lib/formatters';
 import { Search } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -33,7 +33,7 @@ export default function Attendance() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-foreground">Biometric Attendance</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Real-time biometric punch records, working hours, and punctuality tracking.
+            Real-time biometric punch logs, 12-hour timestamps, punctuality exceptions, and worked hours.
           </p>
         </div>
       </div>
@@ -44,15 +44,15 @@ export default function Attendance() {
           <div className="p-5 rounded-2xl bg-card border border-border">
             <span className="text-xs font-semibold text-muted-foreground uppercase">Total Punches</span>
             <div className="mt-2 text-2xl font-bold text-foreground">{summary.total_records}</div>
-            <span className="text-xs text-muted-foreground">Logged in system</span>
+            <span className="text-xs text-muted-foreground">Logged in database</span>
           </div>
           <div className="p-5 rounded-2xl bg-card border border-border">
             <span className="text-xs font-semibold text-muted-foreground uppercase">On-Time / Present</span>
             <div className="mt-2 text-2xl font-bold text-emerald-500">{summary.present_count}</div>
-            <span className="text-xs text-muted-foreground">Normal shifts</span>
+            <span className="text-xs text-muted-foreground">Regular shifts</span>
           </div>
           <div className="p-5 rounded-2xl bg-card border border-border">
-            <span className="text-xs font-semibold text-muted-foreground uppercase">Late Arrivals</span>
+            <span className="text-xs font-semibold text-muted-foreground uppercase">Late / Exceptions</span>
             <div className="mt-2 text-2xl font-bold text-amber-500">{summary.late_count}</div>
             <span className="text-xs text-muted-foreground">Grace period exceeded</span>
           </div>
@@ -84,9 +84,13 @@ export default function Attendance() {
             className="w-full px-3 py-2 text-sm bg-background border border-input rounded-xl focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
           >
             <option value="">All Statuses</option>
-            <option value="PRESENT">Present / On Time</option>
-            <option value="LATE">Late</option>
+            <option value="PRESENT">Present</option>
+            <option value="LATE">Late Arrival</option>
+            <option value="ABSENT">Absent</option>
             <option value="HALF_DAY">Half Day</option>
+            <option value="OVERTIME">Overtime</option>
+            <option value="MISSING_CHECKOUT">Missing Checkout</option>
+            <option value="CORRECTED">Corrected Log</option>
           </select>
         </div>
       </div>
@@ -106,8 +110,8 @@ export default function Attendance() {
                 <th className="py-3 px-4">Date</th>
                 <th className="py-3 px-4">Employee</th>
                 <th className="py-3 px-4">Department</th>
-                <th className="py-3 px-4">Check-In</th>
-                <th className="py-3 px-4">Check-Out</th>
+                <th className="py-3 px-4">Check-In (12-Hr)</th>
+                <th className="py-3 px-4">Check-Out (12-Hr)</th>
                 <th className="py-3 px-4">Worked Hours</th>
                 <th className="py-3 px-4">Status</th>
               </tr>
@@ -115,7 +119,7 @@ export default function Attendance() {
             <tbody className="divide-y divide-border/60">
               {filtered?.map((r: any) => (
                 <tr key={r.id} className="hover:bg-accent/30 transition-colors">
-                  <td className="py-3.5 px-4 font-medium text-foreground">{r.attendance_date}</td>
+                  <td className="py-3.5 px-4 font-medium text-foreground whitespace-nowrap">{r.attendance_date}</td>
                   <td className="py-3.5 px-4 font-medium text-foreground">
                     <Link to={`/employees/${r.employee_id}`} className="hover:text-primary transition-colors">
                       {r.employee_name}
@@ -123,10 +127,22 @@ export default function Attendance() {
                     <div className="text-xs text-muted-foreground">{r.employee_code}</div>
                   </td>
                   <td className="py-3.5 px-4 text-xs text-muted-foreground">{r.department}</td>
-                  <td className="py-3.5 px-4 font-mono text-xs">{r.check_in_time}</td>
-                  <td className="py-3.5 px-4 font-mono text-xs">{r.check_out_time}</td>
-                  <td className="py-3.5 px-4 font-semibold text-foreground">{r.worked_hours} hrs</td>
-                  <td className="py-3.5 px-4">
+                  <td className="py-3.5 px-4 font-mono text-xs whitespace-nowrap">
+                    {r.status === 'ABSENT' ? (
+                      <span className="text-muted-foreground italic">--:--</span>
+                    ) : (
+                      formatTime12Hour(r.check_in_time)
+                    )}
+                  </td>
+                  <td className="py-3.5 px-4 font-mono text-xs whitespace-nowrap">
+                    {r.status === 'ABSENT' || !r.check_out_time || r.check_out_time === '--:--' ? (
+                      <span className="text-muted-foreground italic">--:--</span>
+                    ) : (
+                      formatTime12Hour(r.check_out_time)
+                    )}
+                  </td>
+                  <td className="py-3.5 px-4 font-semibold text-foreground whitespace-nowrap">{r.worked_hours} hrs</td>
+                  <td className="py-3.5 px-4 whitespace-nowrap">
                     <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-semibold ${getStatusBadgeClass(r.status)}`}>
                       {r.status}
                     </span>
