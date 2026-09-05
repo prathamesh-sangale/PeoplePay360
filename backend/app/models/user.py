@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, List
 from sqlalchemy import String, Boolean, Integer, DateTime, ForeignKey, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
@@ -9,6 +9,12 @@ from app.database import Base
 if TYPE_CHECKING:
     from app.models.role import Role
     from app.models.employee import Employee
+    from app.models.attendance_correction import AttendanceCorrection
+    from app.models.time_off_allocation import TimeOffAllocation
+    from app.models.time_off_request import TimeOffRequest
+    from app.models.payrun import Payrun
+    from app.models.payroll_warning import PayrollWarning
+    from app.models.notification import Notification
 
 
 class User(Base):
@@ -36,4 +42,22 @@ class User(Base):
     role: Mapped[Role] = relationship("Role", back_populates="users")
     employee: Mapped[Optional[Employee]] = relationship(
         "Employee", back_populates="user", uselist=False
+    )
+    attendance_corrections: Mapped[List[AttendanceCorrection]] = relationship(
+        "AttendanceCorrection", back_populates="corrected_by_user"
+    )
+    approved_allocations: Mapped[List[TimeOffAllocation]] = relationship(
+        "TimeOffAllocation", back_populates="approved_by_user"
+    )
+    approved_time_off_requests: Mapped[List[TimeOffRequest]] = relationship(
+        "TimeOffRequest", back_populates="approved_by_user"
+    )
+    created_payruns: Mapped[List[Payrun]] = relationship(
+        "Payrun", back_populates="created_by_user"
+    )
+    resolved_payroll_warnings: Mapped[List[PayrollWarning]] = relationship(
+        "PayrollWarning", back_populates="resolved_by_user"
+    )
+    notifications: Mapped[List[Notification]] = relationship(
+        "Notification", back_populates="user", cascade="all, delete-orphan"
     )

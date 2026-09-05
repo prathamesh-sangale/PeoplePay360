@@ -21,6 +21,12 @@ if TYPE_CHECKING:
     from app.models.contract import Contract
     from app.models.employee_schedule_assignment import EmployeeScheduleAssignment
     from app.models.employee_bank_account import EmployeeBankAccount
+    from app.models.attendance import Attendance
+    from app.models.time_off_allocation import TimeOffAllocation
+    from app.models.time_off_request import TimeOffRequest
+    from app.models.payrun_employee import PayrunEmployee
+    from app.models.payslip import Payslip
+    from app.models.payroll_warning import PayrollWarning
 
 
 class Employee(Base):
@@ -106,4 +112,22 @@ class Employee(Base):
     )
     bank_accounts: Mapped[List[EmployeeBankAccount]] = relationship(
         "EmployeeBankAccount", back_populates="employee"
+    )
+    attendances: Mapped[List[Attendance]] = relationship(
+        "Attendance", back_populates="employee"
+    )
+    time_off_allocations: Mapped[List[TimeOffAllocation]] = relationship(
+        "TimeOffAllocation", back_populates="employee"
+    )
+    time_off_requests: Mapped[List[TimeOffRequest]] = relationship(
+        "TimeOffRequest", back_populates="employee"
+    )
+    payrun_employees: Mapped[List[PayrunEmployee]] = relationship(
+        "PayrunEmployee", back_populates="employee"
+    )
+    payslips: Mapped[List[Payslip]] = relationship(
+        "Payslip", back_populates="employee"
+    )
+    payroll_warnings: Mapped[List[PayrollWarning]] = relationship(
+        "PayrollWarning", back_populates="employee"
     )

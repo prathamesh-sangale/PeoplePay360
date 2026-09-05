@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, List
 from sqlalchemy import (
     String,
     Text,
     Integer,
+    BigInteger,
     Numeric,
     Date,
     DateTime,
@@ -22,6 +23,8 @@ if TYPE_CHECKING:
     from app.models.department import Department
     from app.models.job import Job
     from app.models.working_schedule import WorkingSchedule
+    from app.models.salary_structure import SalaryStructure
+    from app.models.payslip import Payslip
 
 
 class Contract(Base):
@@ -56,6 +59,12 @@ class Contract(Base):
         ForeignKey("working_schedules.id", ondelete="RESTRICT"),
         nullable=True,
     )
+    salary_structure_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger,
+        ForeignKey("salary_structures.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     contract_number: Mapped[str] = mapped_column(
         String(100), unique=True, nullable=False
     )
@@ -81,4 +90,10 @@ class Contract(Base):
     job: Mapped[Job] = relationship("Job", back_populates="contracts")
     working_schedule: Mapped[Optional[WorkingSchedule]] = relationship(
         "WorkingSchedule", back_populates="contracts"
+    )
+    salary_structure: Mapped[Optional[SalaryStructure]] = relationship(
+        "SalaryStructure", back_populates="contracts"
+    )
+    payslips: Mapped[List[Payslip]] = relationship(
+        "Payslip", back_populates="contract"
     )
