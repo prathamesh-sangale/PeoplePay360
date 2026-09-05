@@ -111,9 +111,6 @@ export default function Sidebar() {
             <Link to="/admin/users" className={linkClass('/admin/users')}>
               <UserCheck size={16} /> Users
             </Link>
-            <Link to="/admin/roles" className={linkClass('/admin/roles')}>
-              <ShieldCheck size={16} /> Roles
-            </Link>
             <Link to="/admin/audit-logs" className={linkClass('/admin/audit-logs')}>
               <History size={16} /> Audit Logs
             </Link>
