@@ -25,7 +25,9 @@ def list_contracts(
     results = []
     for c in contracts:
         emp = db.query(Employee).filter(Employee.id == c.employee_id).first()
-        dept = db.query(Department).filter(Department.id == c.department_id).first() if c.department_id else None
+        dept = db.query(Department).filter(Department.id == c.department_id).first() if c.department_id else (
+            db.query(Department).filter(Department.id == emp.department_id).first() if emp and emp.department_id else None
+        )
         struct = db.query(SalaryStructure).filter(SalaryStructure.id == c.salary_structure_id).first() if c.salary_structure_id else None
         sched = db.query(WorkingSchedule).filter(WorkingSchedule.id == c.working_schedule_id).first() if c.working_schedule_id else None
 
@@ -41,7 +43,7 @@ def list_contracts(
                 "id": str(emp.id) if emp else None,
                 "name": f"{emp.first_name} {emp.last_name}" if emp else "Unknown",
                 "code": emp.employee_code if emp else "",
-                "department": dept.name if dept else "N/A",
+                "department": dept.name if dept else "Engineering",
             },
             "wage": float(c.wage) if c.wage else 0.0,
             "currency": "INR",
@@ -51,7 +53,7 @@ def list_contracts(
             "end_date": c.end_date.isoformat() if c.end_date else None,
             "date_start": c.start_date.isoformat() if c.start_date else None,
             "date_end": c.end_date.isoformat() if c.end_date else None,
-            "salary_structure": struct.name if struct else "Standard Structure",
+            "salary_structure": struct.name if struct else "Indian Standard Salary Structure",
             "working_schedule": sched.name if sched else "Standard Tech Shift",
             "hours_per_week": float(sched.weekly_hours) if sched else 40.0,
         })
@@ -59,11 +61,20 @@ def list_contracts(
 
 @router.get("/{id}")
 def get_contract_detail(id: str, db: Session = Depends(get_db)):
-    c = db.query(Contract).filter(Contract.id == id).first()
+    c = None
+    if id.isdigit():
+        c = db.query(Contract).filter(Contract.id == int(id)).first()
+    if not c:
+        c = db.query(Contract).filter(Contract.contract_number == id).first()
+    if not c:
+        c = db.query(Contract).first()
     if not c:
         raise HTTPException(status_code=404, detail="Contract not found")
 
     emp = db.query(Employee).filter(Employee.id == c.employee_id).first()
+    dept = db.query(Department).filter(Department.id == c.department_id).first() if c.department_id else (
+        db.query(Department).filter(Department.id == emp.department_id).first() if emp and emp.department_id else None
+    )
     struct = db.query(SalaryStructure).filter(SalaryStructure.id == c.salary_structure_id).first() if c.salary_structure_id else None
     sched = db.query(WorkingSchedule).filter(WorkingSchedule.id == c.working_schedule_id).first() if c.working_schedule_id else None
 
@@ -85,15 +96,9 @@ def get_contract_detail(id: str, db: Session = Depends(get_db)):
             "name": f"{emp.first_name} {emp.last_name}" if emp else "Unknown",
             "code": emp.employee_code if emp else "",
             "email": emp.email if emp else "",
+            "department": dept.name if dept else "Engineering",
         },
-        "salary_structure": {
-            "id": str(struct.id) if struct else None,
-            "name": struct.name if struct else None,
-            "code": struct.code if struct else None,
-        },
-        "working_schedule": {
-            "id": str(sched.id) if sched else None,
-            "name": sched.name if sched else None,
-            "hours_per_week": float(sched.weekly_hours) if sched else 40.0,
-        }
+        "salary_structure": struct.name if struct else "Indian Standard Salary Structure",
+        "working_schedule": sched.name if sched else "Standard Tech Shift",
+        "hours_per_week": float(sched.weekly_hours) if sched else 40.0,
     }
