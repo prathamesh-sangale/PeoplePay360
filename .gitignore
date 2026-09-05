@@ -1,0 +1,17 @@
+node_modules
+dist
+.env
+.venv
+__pycache__
+.pytest_cache
+.coverage
+.idea
+.vscode
+*.pyc
+
+# User requested zip files
+employee.zip
+HR Managaer.zip
+HR Payroll Manager.zip
+HR Payroll.zip
+admin.zip
