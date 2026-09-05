@@ -2,6 +2,7 @@ fastapi
 pydantic
 sqlalchemy
 alembic
+psycopg[binary]
 psycopg2-binary
 pyjwt
 passlib[bcrypt]
