@@ -128,7 +128,7 @@ def get_meta_departments(db: Session = Depends(get_db)):
 @router.get("/meta/jobs")
 def get_meta_jobs(db: Session = Depends(get_db)):
     jobs = db.query(Job).all()
-    return [{"id": str(j.id), "name": j.name, "code": j.code, "department_id": str(j.department_id) if j.department_id else None} for j in jobs]
+    return [{"id": str(j.id), "name": j.name, "code": j.code} for j in jobs]
 
 @router.get("/meta/types")
 def get_meta_types(db: Session = Depends(get_db)):
