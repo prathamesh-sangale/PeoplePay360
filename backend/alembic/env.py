@@ -11,8 +11,10 @@ backend_dir = Path(__file__).resolve().parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-# Import Base and DATABASE_URL from app.database
+# Import Base, models, and DATABASE_URL
 from app.database import Base, DATABASE_URL
+import app.models  # noqa: F401 - ensure models are registered on Base.metadata
+
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
