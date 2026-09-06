@@ -175,7 +175,21 @@ export default function AttendanceToggle({ className = '', compact = false, show
                 <span className="text-xs text-muted-foreground font-medium">real-time duty hours</span>
               </div>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Scheduled Shift: {today?.shift_start || '09:00 AM'} - {today?.shift_end || '06:00 PM'} • Standard 8.0h Shift
+                {today?.last_punch ? (
+                  <>
+                    Last Logged Duty:{' '}
+                    <strong className="text-foreground">
+                      {today.last_punch.formatted_date || today.last_punch.date}
+                    </strong>{' '}
+                    ({today.last_punch.check_in_time} - {today.last_punch.check_out_time} •{' '}
+                    <span className="text-emerald-500 font-semibold">{today.last_punch.worked_hours}h</span>) • Shift:{' '}
+                    {today.shift_start} - {today.shift_end}
+                  </>
+                ) : (
+                  <>
+                    Scheduled Shift: {today?.shift_start || '09:00 AM'} - {today?.shift_end || '06:00 PM'} • Standard 8.0h Shift
+                  </>
+                )}
               </p>
             </div>
           )}

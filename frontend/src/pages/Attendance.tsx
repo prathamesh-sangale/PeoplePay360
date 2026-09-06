@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getAttendance,
   getAttendanceRoster,
+  getTodayAttendance,
   toggleAttendancePunch,
   correctAttendance,
   getMetaDepartments,
@@ -22,6 +23,7 @@ import {
   Calendar,
   ShieldCheck,
   UserX,
+  TrendingUp,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import AttendanceToggle from '../components/AttendanceToggle';
@@ -39,8 +41,8 @@ export default function Attendance() {
     return () => clearInterval(timer);
   }, []);
 
-  // Tabs & Views
-  const [activeTab, setActiveTab] = useState<'roster' | 'history'>('roster');
+  // Tabs & Views (Default to employee personal logs for Employee persona)
+  const [activeTab, setActiveTab] = useState<'roster' | 'history'>(isEmployeeRole ? 'history' : 'roster');
 
   // Filters State
   const [search, setSearch] = useState('');
@@ -66,6 +68,11 @@ export default function Attendance() {
     queryFn: getMetaDepartments,
   });
 
+  const { data: todayData } = useQuery({
+    queryKey: ['attendance-today'],
+    queryFn: getTodayAttendance,
+  });
+
   // Fetch full active roster for the selected department (or all departments)
   const { data: roster, isLoading: isRosterLoading } = useQuery({
     queryKey: ['attendance-roster', deptFilter],
@@ -79,7 +86,7 @@ export default function Attendance() {
   const { data: historyRecords, isLoading: isHistoryLoading } = useQuery({
     queryKey: ['attendance-records', statusFilter],
     queryFn: () => getAttendance({ status: statusFilter !== 'ALL' ? statusFilter : undefined }),
-    enabled: activeTab === 'history',
+    enabled: activeTab === 'history' || isEmployeeRole,
   });
 
   // Toggle Mutation for any employee row
@@ -234,29 +241,21 @@ export default function Attendance() {
           <div className="flex items-center gap-2 mb-1">
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-primary/10 text-primary border border-primary/20">
               <Clock size={13} />
-              Workforce Attendance & Punch Desk
+              {isEmployeeRole ? 'Personal Attendance Hub' : 'Workforce Attendance & Punch Desk'}
             </span>
           </div>
           <h1 className="text-2xl font-bold tracking-tight text-foreground">
-            Attendance Operations & Employee Toggle Roster
+            {isEmployeeRole ? 'My Biometric Attendance & Timesheet' : 'Attendance Operations & Employee Toggle Roster'}
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Real-time shift clock-in/out toggles, live worked hours telemetry, sequence filters, and audit history.
+            {isEmployeeRole
+              ? 'Real-time duty telemetry, verified biometric check-in/out logs, and monthly compliance records.'
+              : 'Real-time shift clock-in/out toggles, live worked hours telemetry, sequence filters, and audit history.'}
           </p>
         </div>
 
         {/* View Switcher Tabs */}
         <div className="flex items-center gap-2 p-1.5 rounded-2xl bg-card border border-border shrink-0">
-          <button
-            onClick={() => setActiveTab('roster')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
-              activeTab === 'roster'
-                ? 'bg-primary text-primary-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            <Users size={14} /> Full Employee Roster
-          </button>
           <button
             onClick={() => setActiveTab('history')}
             className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
@@ -265,13 +264,74 @@ export default function Attendance() {
                 : 'text-muted-foreground hover:text-foreground'
             }`}
           >
-            <Calendar size={14} /> Historical Punch Logs
+            <Calendar size={14} /> {isEmployeeRole ? `My Punch Logs (${historyRecords?.length || 0})` : 'Historical Punch Logs'}
+          </button>
+          <button
+            onClick={() => setActiveTab('roster')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+              activeTab === 'roster'
+                ? 'bg-primary text-primary-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Users size={14} /> {isEmployeeRole ? 'Shift & Team Roster' : 'Full Employee Roster'}
           </button>
         </div>
       </div>
 
-      {/* Real-time Working Hours Telemetry for Employee Persona (Toggle button removed) */}
-      {isEmployeeRole && <AttendanceToggle showToggle={false} />}
+      {/* Real-time Working Hours Telemetry for Employee Persona */}
+      {isEmployeeRole && (
+        <div className="space-y-4">
+          <AttendanceToggle showToggle={false} />
+
+          {/* 4 Employee Personal Metric Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="p-5 rounded-2xl bg-card border border-border shadow-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Total Recorded</span>
+                <div className="p-2 rounded-xl bg-primary/10 text-primary">
+                  <Calendar size={16} />
+                </div>
+              </div>
+              <div className="mt-3 text-2xl font-extrabold text-foreground">{historyRecords?.length || todayData?.month_stats?.total_records || 0} Punches</div>
+              <span className="text-[11px] text-muted-foreground mt-0.5 block">Synced from PostgreSQL database</span>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-card border border-border shadow-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Duty This Month</span>
+                <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-500">
+                  <Clock size={16} />
+                </div>
+              </div>
+              <div className="mt-3 text-2xl font-extrabold text-emerald-500">{todayData?.month_stats?.days_present ?? 0} Days</div>
+              <span className="text-[11px] text-muted-foreground mt-0.5 block">Active pay cycle present days</span>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-card border border-border shadow-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Recorded Hours</span>
+                <div className="p-2 rounded-xl bg-blue-500/10 text-blue-500">
+                  <TrendingUp size={16} />
+                </div>
+              </div>
+              <div className="mt-3 text-2xl font-extrabold text-blue-500">{todayData?.month_stats?.total_hours ?? 0} hrs</div>
+              <span className="text-[11px] text-muted-foreground mt-0.5 block">Cumulative duty worked hours</span>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-card border border-border shadow-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Punctuality Score</span>
+                <div className="p-2 rounded-xl bg-purple-500/10 text-purple-500">
+                  <ShieldCheck size={16} />
+                </div>
+              </div>
+              <div className="mt-3 text-2xl font-extrabold text-purple-500">{todayData?.month_stats?.punctuality_rate ?? 100}%</div>
+              <span className="text-[11px] text-muted-foreground mt-0.5 block">On-time punch compliance</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Global Toast Feedback Banner */}
       {toastMessage && (

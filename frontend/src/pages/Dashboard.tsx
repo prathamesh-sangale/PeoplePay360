@@ -7,7 +7,7 @@ import {
   approveTimeOffRequest,
   rejectTimeOffRequest,
 } from '../lib/api';
-import { formatINR, formatINRPerAnnum } from '../lib/formatters';
+import { formatINR, formatINRPerAnnum, getStatusBadgeClass } from '../lib/formatters';
 import { useRole } from '../context/RoleContext';
 import {
   Users,
@@ -665,10 +665,20 @@ export default function Dashboard() {
               </div>
             </div>
             <div className="mt-4 text-2xl font-extrabold text-foreground">
-              {attendance.today_check_in ? attendance.today_check_in : 'Not Punched'}
+              {attendance.today_check_in
+                ? attendance.today_check_in
+                : attendance.last_duty_in
+                ? `${attendance.last_duty_in}`
+                : 'Not Punched'}
             </div>
             <span className="text-xs text-muted-foreground mt-1 block">
-              {attendance.today_check_out ? `Check-out: ${attendance.today_check_out}` : attendance.clocked_in_today ? 'Currently On Duty' : 'Shift Active'}
+              {attendance.today_check_out
+                ? `Check-out: ${attendance.today_check_out}`
+                : attendance.clocked_in_today
+                ? 'Currently On Duty'
+                : attendance.last_duty_date
+                ? `Last: ${attendance.last_duty_date} (${attendance.last_duty_hours}h)`
+                : 'Standard Shift Active'}
             </span>
           </div>
         </div>
@@ -747,6 +757,73 @@ export default function Dashboard() {
               </div>
             )}
           </div>
+        </div>
+
+        {/* Dedicated Recent Biometric Attendance Logs Section */}
+        <div className="p-6 rounded-3xl bg-card border border-border shadow-xs space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h3 className="text-base font-bold text-foreground flex items-center gap-2">
+                <Clock className="text-emerald-500" size={18} /> My Recent Biometric Attendance Logs
+              </h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Real-time punch records synchronized directly from the PostgreSQL biometric database.
+              </p>
+            </div>
+            <Link
+              to="/attendance"
+              className="text-xs font-bold text-primary hover:underline flex items-center gap-1 shrink-0"
+            >
+              View Full Attendance History ({attendance.total_records || attendance.recent_logs?.length || 0}) →
+            </Link>
+          </div>
+
+          {attendance.recent_logs && attendance.recent_logs.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-border text-xs text-muted-foreground uppercase tracking-wider">
+                    <th className="py-3 px-4">Date</th>
+                    <th className="py-3 px-4">Check-In</th>
+                    <th className="py-3 px-4">Check-Out</th>
+                    <th className="py-3 px-4">Duty Worked</th>
+                    <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-4">Verification</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/60">
+                  {attendance.recent_logs.map((log: any) => (
+                    <tr key={log.id} className="hover:bg-accent/30 transition-colors">
+                      <td className="py-3.5 px-4 font-mono text-xs font-semibold text-foreground whitespace-nowrap">
+                        {log.formatted_date || log.date}
+                      </td>
+                      <td className="py-3.5 px-4 font-mono text-xs whitespace-nowrap">
+                        <span className="font-bold text-foreground">{log.check_in}</span>
+                      </td>
+                      <td className="py-3.5 px-4 font-mono text-xs whitespace-nowrap">
+                        <span className="font-semibold text-foreground">{log.check_out}</span>
+                      </td>
+                      <td className="py-3.5 px-4 font-mono text-xs font-bold text-foreground whitespace-nowrap">
+                        {log.worked_hours} hrs
+                      </td>
+                      <td className="py-3.5 px-4 whitespace-nowrap">
+                        <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${getStatusBadgeClass(log.status)}`}>
+                          {log.status}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4 text-xs text-muted-foreground whitespace-nowrap">
+                        {log.notes}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="p-8 rounded-2xl bg-muted/20 border border-border/60 text-center text-xs text-muted-foreground">
+              No recent attendance logs found. Attendance records will appear once biometric punch sessions are logged.
+            </div>
+          )}
         </div>
       </div>
     );

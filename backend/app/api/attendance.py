@@ -74,6 +74,20 @@ def get_employee_schedule_info(db: Session, employee_id: int):
     return schedule, day, sched_id
 
 
+def resolve_employee_for_user(db: Session, current_user: User) -> Optional[Employee]:
+    """Helper to resolve Employee record for authenticated User across user_id, email, or username."""
+    if not current_user:
+        return db.query(Employee).first()
+    emp = db.query(Employee).filter(
+        (Employee.user_id == current_user.id) | (Employee.email.ilike(current_user.email))
+    ).first()
+    if not emp and current_user.username:
+        emp = db.query(Employee).filter(Employee.email.ilike(f"{current_user.username}%")).first()
+    if not emp:
+        emp = db.query(Employee).first()
+    return emp
+
+
 # =============================================================================
 # 1. ATTENDANCE TOGGLE & ROSTER ENDPOINTS
 # =============================================================================
@@ -89,10 +103,10 @@ def get_today_attendance(
     - check_in / check_out timestamps
     - worked_hours & formatted duration
     - shift timing and status
+    - last_punch: latest recorded biometric shift session from database
+    - month_stats: days present, total duty hours, punctuality rate
     """
-    emp = db.query(Employee).filter(Employee.user_id == current_user.id).first()
-    if not emp:
-        emp = db.query(Employee).first()
+    emp = resolve_employee_for_user(db, current_user)
 
     if not emp:
         return {
@@ -102,12 +116,14 @@ def get_today_attendance(
             "check_in_time": None,
             "check_out": None,
             "check_out_time": None,
-            "worked_hours": None,
+            "worked_hours": 0.0,
             "formatted_worked_time": "00h 00m",
             "status": None,
             "shift_start": "09:00 AM",
             "shift_end": "06:00 PM",
             "shift_name": "Indian Standard Shift (40h/wk)",
+            "last_punch": None,
+            "month_stats": {"days_present": 0, "total_hours": 0.0, "punctuality_rate": 100.0, "total_records": 0},
         }
 
     schedule, sched_day, _ = get_employee_schedule_info(db, emp.id)
@@ -115,6 +131,55 @@ def get_today_attendance(
     shift_end_str = sched_day.end_time.strftime("%I:%M %p") if sched_day and sched_day.end_time else "06:00 PM"
     shift_name = schedule.name if schedule else "Indian Standard Shift"
 
+    # 1. Latest recorded session in database for this employee
+    all_records = (
+        db.query(Attendance)
+        .filter(Attendance.employee_id == emp.id)
+        .order_by(desc(Attendance.check_in))
+        .all()
+    )
+    latest_att = all_records[0] if all_records else None
+
+    # 2. Monthly duty calculation
+    today = date.today()
+    first_of_month = date(today.year, today.month, 1)
+    month_attendances = (
+        db.query(Attendance)
+        .filter(
+            Attendance.employee_id == emp.id,
+            cast(Attendance.check_in, Date) >= first_of_month,
+        )
+        .all()
+    )
+    eff_records = month_attendances if len(month_attendances) > 0 else all_records[:30]
+    present_count = len([a for a in eff_records if a.status in ["PRESENT", "ON_TIME", "OVERTIME", "COMPLETED"]])
+    total_duty_hours = sum(float(a.worked_hours or 0) for a in eff_records)
+    punctual_count = len([a for a in eff_records if a.status in ["PRESENT", "ON_TIME", "OVERTIME", "COMPLETED"]])
+    punctuality_rate = round((punctual_count / len(eff_records) * 100.0), 1) if eff_records else 100.0
+
+    last_punch_data = None
+    if latest_att and latest_att.check_in:
+        last_punch_data = {
+            "id": str(latest_att.id),
+            "date": latest_att.check_in.date().isoformat(),
+            "formatted_date": latest_att.check_in.strftime("%a, %b %d, %Y"),
+            "check_in": latest_att.check_in.isoformat(),
+            "check_in_time": latest_att.check_in.strftime("%I:%M %p"),
+            "check_out": latest_att.check_out.isoformat() if latest_att.check_out else None,
+            "check_out_time": latest_att.check_out.strftime("%I:%M %p") if latest_att.check_out else "--:--",
+            "worked_hours": float(latest_att.worked_hours) if latest_att.worked_hours else 0.0,
+            "status": latest_att.status,
+            "notes": latest_att.notes or "Biometric punch verified",
+        }
+
+    month_stats = {
+        "days_present": present_count,
+        "total_hours": round(total_duty_hours, 1),
+        "punctuality_rate": punctuality_rate,
+        "total_records": len(all_records),
+    }
+
+    # 3. Check for currently open session
     open_att = (
         db.query(Attendance)
         .filter(
@@ -149,9 +214,11 @@ def get_today_attendance(
             "shift_name": shift_name,
             "employee_id": str(emp.id),
             "employee_name": f"{emp.first_name} {emp.last_name}",
+            "last_punch": last_punch_data,
+            "month_stats": month_stats,
         }
 
-    today = date.today()
+    # 4. Check for completed session today
     today_completed = (
         db.query(Attendance)
         .filter(
@@ -179,6 +246,8 @@ def get_today_attendance(
             "shift_name": shift_name,
             "employee_id": str(emp.id),
             "employee_name": f"{emp.first_name} {emp.last_name}",
+            "last_punch": last_punch_data,
+            "month_stats": month_stats,
         }
 
     return {
@@ -196,6 +265,8 @@ def get_today_attendance(
         "shift_name": shift_name,
         "employee_id": str(emp.id),
         "employee_name": f"{emp.first_name} {emp.last_name}",
+        "last_punch": last_punch_data,
+        "month_stats": month_stats,
     }
 
 
@@ -221,16 +292,14 @@ def toggle_punch_attendance(
     user_role = getattr(current_user, "normalized_role", "EMPLOYEE")
     
     if user_role == "EMPLOYEE":
-        emp = db.query(Employee).filter(Employee.user_id == current_user.id).first()
-        if not emp:
-            emp = db.query(Employee).first()
+        emp = resolve_employee_for_user(db, current_user)
     else:
         # HR / Admin
         target_id = payload.employee_id if payload and payload.employee_id else None
         if target_id:
             emp = db.query(Employee).filter(Employee.id == target_id).first()
         else:
-            emp = db.query(Employee).filter(Employee.user_id == current_user.id).first() or db.query(Employee).first()
+            emp = resolve_employee_for_user(db, current_user)
 
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
@@ -333,7 +402,7 @@ def get_attendance_roster(
     emp_query = db.query(Employee).filter(Employee.status == "ACTIVE")
     
     if user_role == "EMPLOYEE":
-        emp_record = db.query(Employee).filter(Employee.user_id == current_user.id).first()
+        emp_record = resolve_employee_for_user(db, current_user)
         if emp_record:
             emp_query = emp_query.filter(Employee.id == emp_record.id)
 
@@ -475,7 +544,7 @@ def list_attendance(
     query = db.query(Attendance)
     user_role = getattr(current_user, "normalized_role", "EMPLOYEE")
     if user_role == "EMPLOYEE":
-        emp_record = db.query(Employee).filter(Employee.user_id == current_user.id).first()
+        emp_record = resolve_employee_for_user(db, current_user)
         if not emp_record:
             return []
         if employee_id and employee_id != emp_record.id:

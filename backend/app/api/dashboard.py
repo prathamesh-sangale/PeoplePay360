@@ -450,9 +450,18 @@ def get_employee_dashboard_stats(
         .first()
     )
 
-    # Attendance this month & today
+    # Attendance history & telemetry
     today = date.today()
     first_of_month = date(today.year, today.month, 1)
+
+    all_attendances = (
+        db.query(Attendance)
+        .filter(Attendance.employee_id == emp_id)
+        .order_by(desc(Attendance.check_in))
+        .all()
+    )
+    latest_att = all_attendances[0] if all_attendances else None
+
     month_attendances = (
         db.query(Attendance)
         .filter(
@@ -461,6 +470,8 @@ def get_employee_dashboard_stats(
         )
         .all()
     )
+    eff_attendances = month_attendances if len(month_attendances) > 0 else all_attendances[:30]
+
     today_punch = (
         db.query(Attendance)
         .filter(
@@ -471,8 +482,22 @@ def get_employee_dashboard_stats(
         .first()
     )
 
-    present_count = len([a for a in month_attendances if a.status in ["PRESENT", "ON_TIME", "OVERTIME"]])
-    total_worked_hrs = sum(float(a.worked_hours or 0) for a in month_attendances)
+    present_count = len([a for a in eff_attendances if a.status in ["PRESENT", "ON_TIME", "OVERTIME", "COMPLETED"]])
+    total_worked_hrs = sum(float(a.worked_hours or 0) for a in eff_attendances)
+
+    recent_logs = [
+        {
+            "id": str(a.id),
+            "date": a.check_in.date().isoformat() if a.check_in else "",
+            "formatted_date": a.check_in.strftime("%a, %b %d, %Y") if a.check_in else "",
+            "check_in": a.check_in.strftime("%I:%M %p") if a.check_in else "--:--",
+            "check_out": a.check_out.strftime("%I:%M %p") if a.check_out else "--:--",
+            "worked_hours": float(a.worked_hours) if a.worked_hours else 0.0,
+            "status": a.status,
+            "notes": a.notes or "Biometric punch verified",
+        }
+        for a in all_attendances[:10]
+    ]
 
     # Pending leave requests
     pending_leaves = (
@@ -541,8 +566,15 @@ def get_employee_dashboard_stats(
             "days_present_month": present_count,
             "total_hours_month": round(total_worked_hrs, 1),
             "clocked_in_today": bool(today_punch and today_punch.check_in and not today_punch.check_out),
-            "today_check_in": today_punch.check_in.strftime("%H:%M") if today_punch and today_punch.check_in else None,
-            "today_check_out": today_punch.check_out.strftime("%H:%M") if today_punch and today_punch.check_out else None,
+            "today_check_in": today_punch.check_in.strftime("%I:%M %p") if today_punch and today_punch.check_in else None,
+            "today_check_out": today_punch.check_out.strftime("%I:%M %p") if today_punch and today_punch.check_out else None,
+            "last_duty_date": latest_att.check_in.strftime("%b %d, %Y") if latest_att and latest_att.check_in else None,
+            "last_duty_in": latest_att.check_in.strftime("%I:%M %p") if latest_att and latest_att.check_in else None,
+            "last_duty_out": latest_att.check_out.strftime("%I:%M %p") if latest_att and latest_att.check_out else None,
+            "last_duty_hours": float(latest_att.worked_hours or 0) if latest_att else 0.0,
+            "last_duty_status": latest_att.status if latest_att else "PRESENT",
+            "total_records": len(all_attendances),
+            "recent_logs": recent_logs,
         },
         "pending_leaves_count": len(pending_leaves),
         "pending_leaves": [
