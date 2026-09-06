@@ -248,16 +248,16 @@ export default function Departments() {
               </div>
 
               <div>
-                <label className="font-semibold text-muted-foreground block mb-1">Department Lead / Manager (Optional)</label>
+                <label className="font-semibold text-muted-foreground block mb-1">Department Head / Manager (Optional)</label>
                 <select
                   value={managerId}
                   onChange={(e) => setManagerId(e.target.value)}
-                  className="w-full p-2.5 rounded-xl border border-input bg-background focus:ring-1 focus:ring-primary focus:outline-none text-foreground"
+                  className="w-full p-2.5 rounded-xl border border-input bg-background focus:ring-1 focus:ring-primary focus:outline-none text-foreground font-medium"
                 >
                   <option value="">No Manager Assigned</option>
-                  {employees?.map((emp: any) => (
+                  {employees?.filter((emp: any) => emp.status === 'ACTIVE' || !emp.status).map((emp: any) => (
                     <option key={emp.id} value={emp.id}>
-                      {emp.full_name} ({emp.employee_code})
+                      {emp.full_name || `${emp.first_name} ${emp.last_name}`} ({emp.job?.name || emp.department?.name || 'Staff'} • {emp.employee_code})
                     </option>
                   ))}
                 </select>

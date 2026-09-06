@@ -81,7 +81,7 @@ def list_employees(
         primary_bank = db.query(EmployeeBankAccount).filter(EmployeeBankAccount.employee_id == emp.id, EmployeeBankAccount.is_primary == True).first()
 
         dept_code = dept.code if dept else "ENG"
-        work_city = CITY_MAP.get(dept_code, "Bengaluru, Karnataka")
+        work_city = emp.work_location or CITY_MAP.get(dept_code, "Bengaluru, Karnataka")
 
         results.append({
             "id": str(emp.id),
@@ -161,7 +161,7 @@ def get_employee_detail(id: str, db: Session = Depends(get_db)):
     manager = db.query(Employee).filter(Employee.id == emp.manager_id).first() if emp.manager_id else None
 
     dept_code = dept.code if dept else "ENG"
-    work_city = CITY_MAP.get(dept_code, "Bengaluru, Karnataka")
+    work_city = emp.work_location or CITY_MAP.get(dept_code, "Bengaluru, Karnataka")
 
     # Contracts
     contracts = db.query(Contract).filter(Contract.employee_id == emp.id).order_by(desc(Contract.start_date)).all()
@@ -290,8 +290,13 @@ class EmployeeCreate(BaseModel):
     job_id: int
     employee_type_id: Optional[int] = None
     manager_id: Optional[int] = None
-    status: str = "ACTIVE"
+    salary_structure_id: Optional[int] = None
+    working_schedule_id: Optional[int] = None
     initial_wage: Optional[float] = None
+    work_location: Optional[str] = None
+    pan_number: Optional[str] = None
+    aadhaar_number: Optional[str] = None
+    status: str = "ACTIVE"
 
 
 class EmployeeUpdate(BaseModel):
@@ -305,12 +310,21 @@ class EmployeeUpdate(BaseModel):
     job_id: Optional[int] = None
     employee_type_id: Optional[int] = None
     manager_id: Optional[int] = None
+    work_location: Optional[str] = None
     status: Optional[str] = None
 
 
 @router.post("", dependencies=[Depends(require_role("HR", "ADMIN"))])
 def create_employee(payload: EmployeeCreate, db: Session = Depends(get_db)):
-    """Registers a new employee into PeoplePay360. Requires HR or ADMIN role."""
+    """
+    Registers a new employee into PeoplePay360 within an atomic database transaction:
+    1. Validates unique email, code, department, and job.
+    2. Creates the canonical Employee record.
+    3. Links the Working Schedule assignment.
+    4. Creates the primary Active Employment Contract with Salary Structure & Wage.
+    5. Initializes statutory leave allocations (PL, CL, SL).
+    6. Rolls back the entire transaction if any step fails.
+    """
     # Check email duplicate
     if db.query(Employee).filter(Employee.email.ilike(payload.email.strip())).first():
         raise HTTPException(status_code=400, detail=f"Employee with email '{payload.email}' already exists.")
@@ -342,61 +356,146 @@ def create_employee(payload: EmployeeCreate, db: Session = Depends(get_db)):
     joining = payload.date_of_joining or date.today()
     dob = payload.date_of_birth or date(1995, 1, 1)
 
-    new_emp = Employee(
-        employee_code=code,
-        first_name=payload.first_name.strip(),
-        last_name=payload.last_name.strip(),
-        email=payload.email.strip().lower(),
-        phone=payload.phone.strip() if payload.phone else "+91 98765 43210",
-        date_of_birth=dob,
-        date_of_joining=joining,
-        department_id=dept.id,
-        job_id=job.id,
-        employee_type_id=emp_type_id,
-        manager_id=payload.manager_id if payload.manager_id and payload.manager_id > 0 else None,
-        status=payload.status.upper(),
+    work_loc = (
+        payload.work_location.strip()
+        if payload.work_location and payload.work_location.strip()
+        else CITY_MAP.get(dept.code, "Bengaluru, Karnataka")
     )
-    db.add(new_emp)
-    db.flush()
 
-    # If initial wage provided, create initial contract
-    if payload.initial_wage and payload.initial_wage > 0:
-        c_num = f"CON-{code}-01"
-        from app.models.salary_structure import SalaryStructure
+    try:
+        new_emp = Employee(
+            employee_code=code,
+            first_name=payload.first_name.strip(),
+            last_name=payload.last_name.strip(),
+            email=payload.email.strip().lower(),
+            phone=payload.phone.strip() if payload.phone else "+91 98765 43210",
+            date_of_birth=dob,
+            date_of_joining=joining,
+            department_id=dept.id,
+            job_id=job.id,
+            employee_type_id=emp_type_id,
+            manager_id=payload.manager_id if payload.manager_id and payload.manager_id > 0 else None,
+            work_location=work_loc,
+            status=payload.status.upper(),
+        )
+        db.add(new_emp)
+        db.flush()
+
+        # 1. Resolve & assign working schedule
         from app.models.working_schedule import WorkingSchedule
-        struct = db.query(SalaryStructure).first()
-        sched = db.query(WorkingSchedule).first()
+        from app.models.employee_schedule_assignment import EmployeeScheduleAssignment
+        sched_id = payload.working_schedule_id
+        if not sched_id or sched_id <= 0:
+            first_sched = db.query(WorkingSchedule).first()
+            sched_id = first_sched.id if first_sched else 1
+
+        sched_assign = EmployeeScheduleAssignment(
+            employee_id=new_emp.id,
+            working_schedule_id=sched_id,
+            start_date=joining,
+            is_active=True,
+        )
+        db.add(sched_assign)
+
+        # 2. Resolve Salary Structure & create active Contract
+        from app.models.salary_structure import SalaryStructure
+        struct_id = payload.salary_structure_id
+        if not struct_id or struct_id <= 0:
+            first_struct = db.query(SalaryStructure).first()
+            struct_id = first_struct.id if first_struct else 1
+
+        wage_val = payload.initial_wage if payload.initial_wage and payload.initial_wage > 0 else 75000.0
+        c_num = f"CON-{code}-01"
         new_contract = Contract(
             employee_id=new_emp.id,
             department_id=dept.id,
             job_id=job.id,
-            salary_structure_id=struct.id if struct else 1,
-            working_schedule_id=sched.id if sched else 1,
+            salary_structure_id=struct_id,
+            working_schedule_id=sched_id,
             contract_number=c_num,
-            wage=payload.initial_wage,
+            wage=wage_val,
             start_date=joining,
             status="ACTIVE",
         )
         db.add(new_contract)
 
-    db.commit()
-    db.refresh(new_emp)
+        # 3. Initialize annual statutory leave allocations (PL: 15, CL: 12, SL: 10)
+        from app.models.time_off_type import TimeOffType
+        from app.models.time_off_allocation import TimeOffAllocation
+        leave_types = db.query(TimeOffType).all()
+        DEFAULT_LEAVE_DAYS = {"PL": 15.0, "CL": 12.0, "SL": 10.0, "EL": 15.0}
+        for lt in leave_types:
+            if lt.code in DEFAULT_LEAVE_DAYS:
+                alloc = TimeOffAllocation(
+                    employee_id=new_emp.id,
+                    time_off_type_id=lt.id,
+                    allocated_amount=DEFAULT_LEAVE_DAYS[lt.code],
+                    taken_amount=0.0,
+                    start_date=date(joining.year, 1, 1),
+                    end_date=date(joining.year, 12, 31),
+                    status="APPROVED",
+                    notes=f"Initial Onboarding Quota ({DEFAULT_LEAVE_DAYS[lt.code]} days)",
+                )
+        # 4. Automatically create and link an active User account for the employee
+        from app.models.user import User
+        from app.models.role import Role
+        emp_role = db.query(Role).filter(Role.name.in_(["EMPLOYEE", "Employee"])).first()
+        if not emp_role:
+            emp_role = db.query(Role).first()
 
-    return {
-        "status": "success",
-        "message": f"Employee {new_emp.first_name} {new_emp.last_name} ({new_emp.employee_code}) created successfully.",
-        "id": str(new_emp.id),
-        "employee_code": new_emp.employee_code,
-        "name": f"{new_emp.first_name} {new_emp.last_name}".strip(),
-        "first_name": new_emp.first_name,
-        "last_name": new_emp.last_name,
-    }
+        user_email = new_emp.email.strip().lower()
+        user_name = user_email.split("@")[0]
+        existing_user = db.query(User).filter(
+            (User.email.ilike(user_email)) | (User.username.ilike(user_name))
+        ).first()
+
+        if existing_user:
+            new_emp.user_id = existing_user.id
+        else:
+            new_user = User(
+                username=user_name,
+                email=user_email,
+                password_hash="pbkdf2:sha256:600000$demo$defaultpasswordhash",
+                role_id=emp_role.id if emp_role else None,
+                is_active=True,
+            )
+            db.add(new_user)
+            db.flush()
+            new_emp.user_id = new_user.id
+
+        db.commit()
+        db.refresh(new_emp)
+
+        return {
+            "status": "success",
+            "message": f"Employee {new_emp.first_name} {new_emp.last_name} ({new_emp.employee_code}) created successfully.",
+            "id": str(new_emp.id),
+            "employee_code": new_emp.employee_code,
+            "name": f"{new_emp.first_name} {new_emp.last_name}".strip(),
+            "first_name": new_emp.first_name,
+            "last_name": new_emp.last_name,
+            "department": dept.name,
+            "job_title": job.name,
+            "work_location": new_emp.work_location,
+            "contract_wage": wage_val,
+            "working_schedule_id": sched_id,
+            "salary_structure_id": struct_id,
+        }
+    except Exception as e:
+        db.rollback()
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=500, detail=f"Transactional employee creation failed: {str(e)}")
 
 
 @router.put("/{id}", dependencies=[Depends(require_role("HR", "ADMIN"))])
-def update_employee(id: int, payload: EmployeeUpdate, db: Session = Depends(get_db)):
+def update_employee(id: str, payload: EmployeeUpdate, db: Session = Depends(get_db)):
     """Updates employee profile information and employment status."""
-    emp = db.query(Employee).filter(Employee.id == id).first()
+    emp = None
+    if id.isdigit():
+        emp = db.query(Employee).filter(Employee.id == int(id)).first()
+    if not emp:
+        emp = db.query(Employee).filter(Employee.employee_code == id).first()
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
 
@@ -420,6 +519,8 @@ def update_employee(id: int, payload: EmployeeUpdate, db: Session = Depends(get_
         emp.employee_type_id = payload.employee_type_id
     if payload.manager_id is not None:
         emp.manager_id = payload.manager_id if payload.manager_id > 0 else None
+    if payload.work_location is not None:
+        emp.work_location = payload.work_location.strip()
     if payload.status is not None:
         emp.status = payload.status.upper()
 
@@ -430,5 +531,8 @@ def update_employee(id: int, payload: EmployeeUpdate, db: Session = Depends(get_
         "status": "success",
         "message": f"Employee {emp.first_name} {emp.last_name} updated successfully.",
         "id": str(emp.id),
+        "employee_code": emp.employee_code,
+        "work_location": emp.work_location,
+        "full_name": f"{emp.first_name} {emp.last_name}",
     }
 

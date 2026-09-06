@@ -107,25 +107,25 @@ export default function Reports() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="p-5 rounded-2xl bg-card border border-border space-y-1">
               <span className="text-xs font-semibold text-muted-foreground uppercase">Total Gross CTC</span>
-              <div className="text-2xl font-bold text-foreground">{formatINR(summary?.total_gross || 2170000)}</div>
-              <span className="text-xs text-muted-foreground">15 employees covered</span>
+              <div className="text-2xl font-bold text-foreground">{formatINR(summary?.total_gross || 0)}</div>
+              <span className="text-xs text-muted-foreground">{summary?.headcount || 0} employees covered</span>
             </div>
 
             <div className="p-5 rounded-2xl bg-card border border-border space-y-1">
               <span className="text-xs font-semibold text-muted-foreground uppercase">Total Net Disbursement</span>
-              <div className="text-2xl font-bold text-emerald-500">{formatINR(summary?.total_net || 1888700)}</div>
+              <div className="text-2xl font-bold text-emerald-500">{formatINR(summary?.total_net || 0)}</div>
               <span className="text-xs text-emerald-500/80 font-medium">100% Disbursed via Bank Transfer</span>
             </div>
 
             <div className="p-5 rounded-2xl bg-card border border-border space-y-1">
               <span className="text-xs font-semibold text-muted-foreground uppercase">Statutory EPF Remit</span>
-              <div className="text-2xl font-bold text-blue-500">{formatINR(summary?.total_epf || 27000)}</div>
+              <div className="text-2xl font-bold text-blue-500">{formatINR(summary?.total_epf || 0)}</div>
               <span className="text-xs text-muted-foreground">EE + ER Share</span>
             </div>
 
             <div className="p-5 rounded-2xl bg-card border border-border space-y-1">
               <span className="text-xs font-semibold text-muted-foreground uppercase">Income Tax (TDS)</span>
-              <div className="text-2xl font-bold text-amber-500">{formatINR(summary?.total_tds || 251300)}</div>
+              <div className="text-2xl font-bold text-amber-500">{formatINR(summary?.total_tds || 0)}</div>
               <span className="text-xs text-muted-foreground">Section 192 Tax</span>
             </div>
           </div>
@@ -201,19 +201,19 @@ export default function Reports() {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
               <div className="p-3.5 rounded-xl bg-background border border-border space-y-1">
                 <span className="text-muted-foreground">Total Members</span>
-                <div className="text-xl font-bold text-foreground">{epfData?.total_members || 15}</div>
+                <div className="text-xl font-bold text-foreground">{epfData?.total_members || epfData?.items?.length || 0}</div>
               </div>
               <div className="p-3.5 rounded-xl bg-background border border-border space-y-1">
                 <span className="text-muted-foreground">Employee Share (12%)</span>
-                <div className="text-xl font-bold text-blue-500">{formatINR(epfData?.total_ee_share || 27000)}</div>
+                <div className="text-xl font-bold text-blue-500">{formatINR(epfData?.total_ee_share || 0)}</div>
               </div>
               <div className="p-3.5 rounded-xl bg-background border border-border space-y-1">
                 <span className="text-muted-foreground">Employer EPS (8.33%)</span>
-                <div className="text-xl font-bold text-foreground">{formatINR(epfData?.total_er_eps || 18742)}</div>
+                <div className="text-xl font-bold text-foreground">{formatINR(epfData?.total_er_eps || 0)}</div>
               </div>
               <div className="p-3.5 rounded-xl bg-background border border-border space-y-1">
                 <span className="text-muted-foreground">Total Challan Remittance</span>
-                <div className="text-xl font-bold text-emerald-500">{formatINR(epfData?.total_challan_amount || 55250)}</div>
+                <div className="text-xl font-bold text-emerald-500">{formatINR(epfData?.total_challan_amount || 0)}</div>
               </div>
             </div>
 

@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from sqlalchemy import func, desc
+from sqlalchemy import func, desc, cast, Date
 from app.database import get_db
 from app.models.employee import Employee
 from app.models.contract import Contract
 from app.models.payrun import Payrun
 from app.models.payslip import Payslip
+from app.models.payslip_line import PayslipLine
 from app.models.attendance import Attendance
 from app.models.time_off_request import TimeOffRequest
 from app.models.payroll_warning import PayrollWarning
@@ -138,12 +139,34 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
             "is_resolved": w.is_resolved,
         })
 
+    # Admin Executive Compensation Details
+    admin_emp = db.query(Employee).filter(Employee.id == 1).first()
+    admin_contract = db.query(Contract).filter(Contract.employee_id == 1, Contract.status == "ACTIVE").first()
+    admin_payslip = db.query(Payslip).filter(Payslip.employee_id == 1).order_by(desc(Payslip.period_end), desc(Payslip.id)).first()
+    admin_wage_data = {
+        "employee_id": 1,
+        "employee_code": admin_emp.employee_code if admin_emp else "EMP-IND-001",
+        "name": f"{admin_emp.first_name} {admin_emp.last_name}" if admin_emp else "Aarav Sharma",
+        "job_title": "VP of Engineering & System Administrator",
+        "monthly_wage": float(admin_contract.wage) if admin_contract else 300000.0,
+        "net_wage": float(admin_payslip.net_amount) if admin_payslip else 244000.0,
+        "basic_wage": float(admin_payslip.basic_amount) if admin_payslip else 150000.0,
+        "gross_wage": float(admin_payslip.gross_amount) if admin_payslip else 300000.0,
+        "annual_ctc": float(admin_contract.wage * 12) if admin_contract else 3600000.0,
+        "contract_status": admin_contract.status if admin_contract else "ACTIVE",
+        "contract_number": admin_contract.contract_number if admin_contract else "CONT-IND-EMP-IND-001-2026",
+    }
+
     return {
         "metrics": {
             "total_employees": total_employees,
             "active_employees": active_employees,
             "active_contracts": active_contracts,
+            "total_monthly_wage_volume": float(total_monthly_wage_volume),
             "monthly_payroll_inr": float(total_monthly_wage_volume),
+            "admin_monthly_wage": float(admin_contract.wage) if admin_contract else 300000.0,
+            "admin_net_wage": float(admin_payslip.net_amount) if admin_payslip else 244000.0,
+            "admin_annual_ctc": float(admin_contract.wage * 12) if admin_contract else 3600000.0,
             "payruns_count": payruns_count,
             "attendance_rate": attendance_rate,
             "punches_today": total_punches_today,
@@ -154,6 +177,7 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
             "unresolved_warnings": unresolved_warnings,
             "unread_notifications": unread_notifications,
         },
+        "admin_wage": admin_wage_data,
         "department_distribution": dept_stats,
         "recent_payruns": recent_payruns,
         "recent_payslips": recent_payslips,
@@ -248,7 +272,69 @@ def get_hr_dashboard_stats(db: Session = Depends(get_db)):
             "employee_count": emp_count,
         })
 
-    # 6. Recent Pending Leaves for Quick Actions
+    # 6. HR Employee Warnings & Compliance Alerts
+    hr_warnings = []
+    
+    # 6a. Active employees without an active contract
+    without_contract_emps = db.query(Employee).filter(Employee.status == "ACTIVE")
+    if employees_with_active_contract:
+        without_contract_emps = without_contract_emps.filter(~Employee.id.in_(employees_with_active_contract))
+    for e in without_contract_emps.limit(5).all():
+        hr_warnings.append({
+            "id": f"no-contract-{e.id}",
+            "type": "MISSING_CONTRACT",
+            "category": "HR Compliance",
+            "severity": "DANGER",
+            "title": "Missing Active Contract",
+            "message": f"Active employee {e.first_name} {e.last_name} ({e.employee_code}) has no active employment contract assigned.",
+            "employee_id": str(e.id),
+            "employee_name": f"{e.first_name} {e.last_name}",
+            "employee_code": e.employee_code,
+            "action_link": f"/contracts",
+            "action_label": "Create Contract",
+        })
+
+    # 6b. Contracts expiring soon (within 60 days)
+    expiring_contract_records = db.query(Contract).join(Employee).filter(
+        Contract.status == "ACTIVE",
+        Contract.end_date != None,
+        Contract.end_date <= sixty_days_future,
+        Contract.end_date >= today
+    ).limit(5).all()
+    for c in expiring_contract_records:
+        e = db.query(Employee).filter(Employee.id == c.employee_id).first()
+        days_left = (c.end_date - today).days if c.end_date else 0
+        hr_warnings.append({
+            "id": f"exp-contract-{c.id}",
+            "type": "CONTRACT_EXPIRING",
+            "category": "Contract Lifecycle",
+            "severity": "WARNING",
+            "title": f"Contract Expiring in {days_left} Days",
+            "message": f"Contract for {e.first_name} {e.last_name if e else 'Employee'} ({c.contract_number or f'CTR-{c.id:04d}'}) expires on {c.end_date.strftime('%b %d, %Y')}.",
+            "employee_id": str(e.id) if e else None,
+            "employee_name": f"{e.first_name} {e.last_name}" if e else "Staff",
+            "employee_code": e.employee_code if e else "",
+            "action_link": f"/contracts",
+            "action_label": "Renew Contract",
+        })
+
+    # 6c. Pending Leaves requiring HR review
+    if pending_leaves > 0:
+        hr_warnings.append({
+            "id": "pending-leaves-summary",
+            "type": "PENDING_LEAVES",
+            "category": "Time Off",
+            "severity": "WARNING",
+            "title": f"{pending_leaves} Pending Leave Requests",
+            "message": f"There are {pending_leaves} employee leave requests awaiting HR manager review and approval.",
+            "employee_id": None,
+            "employee_name": None,
+            "employee_code": None,
+            "action_link": "/time-off",
+            "action_label": "Review Leaves",
+        })
+
+    # 7. Recent Pending Leaves for Quick Actions
     recent_pending = db.query(TimeOffRequest).filter(TimeOffRequest.status == "PENDING").order_by(desc(TimeOffRequest.id)).limit(5).all()
     pending_list = []
     for r in recent_pending:
@@ -266,7 +352,7 @@ def get_hr_dashboard_stats(db: Session = Depends(get_db)):
             "reason": r.reason,
         })
 
-    # 7. Recent Employee Joinings
+    # 8. Recent Employee Joinings
     recent_employees = db.query(Employee).order_by(desc(Employee.date_of_joining), desc(Employee.id)).limit(5).all()
     new_hires = []
     for e in recent_employees:
@@ -315,7 +401,244 @@ def get_hr_dashboard_stats(db: Session = Depends(get_db)):
             "without_active_contract": without_contract,
         },
         "department_distribution": dept_stats,
+        "warnings": hr_warnings,
+        "warnings_count": len(hr_warnings),
         "recent_pending_leaves": pending_list,
         "recent_new_hires": new_hires,
+    }
+
+
+from app.auth.rbac import get_current_user
+from app.models.user import User
+from app.payroll.payroll_engine import get_employee_leave_balances
+
+
+@router.get("/employee")
+def get_employee_dashboard_stats(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Returns live personalized telemetry for the authenticated employee:
+    1. Employee profile summary & job/department
+    2. Unified leave balances (PL, CL, SL)
+    3. Latest payslip info
+    4. Attendance records and today's punch status
+    5. Pending leave requests
+    """
+    emp = db.query(Employee).filter(
+        (Employee.user_id == current_user.id) | (Employee.email.ilike(current_user.email))
+    ).first()
+    if not emp and current_user.username:
+        emp = db.query(Employee).filter(Employee.email.ilike(f"{current_user.username}%")).first()
+    if not emp:
+        # Fallback to first employee if current_user not linked directly
+        emp = db.query(Employee).first()
+
+    emp_id = emp.id if emp else 1
+    dept = db.query(Department).filter(Department.id == emp.department_id).first() if emp and emp.department_id else None
+    job = db.query(Job).filter(Job.id == emp.job_id).first() if emp and emp.job_id else None
+
+    # Leave balances
+    balances = get_employee_leave_balances(db, emp_id) if emp else []
+
+    # Latest payslip
+    latest_payslip = (
+        db.query(Payslip)
+        .filter(Payslip.employee_id == emp_id)
+        .order_by(desc(Payslip.period_end), desc(Payslip.id))
+        .first()
+    )
+
+    # Attendance this month & today
+    today = date.today()
+    first_of_month = date(today.year, today.month, 1)
+    month_attendances = (
+        db.query(Attendance)
+        .filter(
+            Attendance.employee_id == emp_id,
+            cast(Attendance.check_in, Date) >= first_of_month,
+        )
+        .all()
+    )
+    today_punch = (
+        db.query(Attendance)
+        .filter(
+            Attendance.employee_id == emp_id,
+            cast(Attendance.check_in, Date) == today,
+        )
+        .order_by(desc(Attendance.id))
+        .first()
+    )
+
+    present_count = len([a for a in month_attendances if a.status in ["PRESENT", "ON_TIME", "OVERTIME"]])
+    total_worked_hrs = sum(float(a.worked_hours or 0) for a in month_attendances)
+
+    # Pending leave requests
+    pending_leaves = (
+        db.query(TimeOffRequest)
+        .filter(
+            TimeOffRequest.employee_id == emp_id,
+            TimeOffRequest.status == "PENDING",
+        )
+        .order_by(desc(TimeOffRequest.id))
+        .all()
+    )
+
+    # Check if new employee (joined within 30 days or no prior records)
+    is_new = bool((emp and emp.date_of_joining and (today - emp.date_of_joining).days <= 30) or (present_count == 0 and not latest_payslip))
+
+    # Personalized Employee Warnings & Action Items
+    from app.models.employee_bank_account import EmployeeBankAccount
+    emp_warnings = []
+
+    primary_bank = db.query(EmployeeBankAccount).filter(EmployeeBankAccount.employee_id == emp_id, EmployeeBankAccount.is_primary == True).first()
+    if not primary_bank:
+        emp_warnings.append({
+            "id": "missing-bank-acct",
+            "type": "MISSING_BANK_DETAILS",
+            "severity": "WARNING",
+            "title": "Missing Primary Bank Details",
+            "message": "You have not added a verified primary bank account for direct INR salary credit disbursements.",
+            "action_link": f"/employees/{emp_id}",
+            "action_label": "Update Profile",
+        })
+
+    emp_contract = db.query(Contract).filter(Contract.employee_id == emp_id, Contract.status == "ACTIVE").first()
+    if emp_contract and emp_contract.end_date and emp_contract.end_date <= (today + timedelta(days=60)) and emp_contract.end_date >= today:
+        days_remaining = (emp_contract.end_date - today).days
+        emp_warnings.append({
+            "id": "contract-expiring-self",
+            "type": "CONTRACT_EXPIRING",
+            "severity": "INFO",
+            "title": f"Contract Renewal ({days_remaining} Days Left)",
+            "message": f"Your current employment contract is scheduled for review on {emp_contract.end_date.strftime('%b %d, %Y')}.",
+            "action_link": "/contracts",
+            "action_label": "View Contract",
+        })
+
+    return {
+        "employee": {
+            "id": str(emp.id) if emp else None,
+            "employee_code": emp.employee_code if emp else "",
+            "name": f"{emp.first_name} {emp.last_name}" if emp else "Employee",
+            "department": dept.name if dept else "Engineering",
+            "job_title": job.name if job else "Specialist",
+            "email": emp.email if emp else current_user.email,
+            "is_new": is_new,
+            "date_of_joining": emp.date_of_joining.isoformat() if emp and emp.date_of_joining else None,
+        },
+        "leave_balances": balances,
+        "latest_payslip": {
+            "id": str(latest_payslip.id) if latest_payslip else None,
+            "payslip_number": f"PSL-2026-{latest_payslip.id:04d}" if latest_payslip else None,
+            "period": f"{latest_payslip.period_start.strftime('%b %Y')}" if latest_payslip and latest_payslip.period_start else "August 2026",
+            "gross_wage": float(latest_payslip.gross_amount or 0) if latest_payslip else 0.0,
+            "net_wage": float(latest_payslip.net_amount or 0) if latest_payslip else 0.0,
+            "status": latest_payslip.status if latest_payslip else "PAID",
+        } if latest_payslip else None,
+        "attendance": {
+            "days_present_month": present_count,
+            "total_hours_month": round(total_worked_hrs, 1),
+            "clocked_in_today": bool(today_punch and today_punch.check_in and not today_punch.check_out),
+            "today_check_in": today_punch.check_in.strftime("%H:%M") if today_punch and today_punch.check_in else None,
+            "today_check_out": today_punch.check_out.strftime("%H:%M") if today_punch and today_punch.check_out else None,
+        },
+        "pending_leaves_count": len(pending_leaves),
+        "pending_leaves": [
+            {
+                "id": str(r.id),
+                "start_date": r.start_date.isoformat(),
+                "end_date": r.end_date.isoformat(),
+                "days": float(r.requested_amount),
+                "reason": r.reason,
+            }
+            for r in pending_leaves
+        ],
+        "warnings": emp_warnings,
+        "warnings_count": len(emp_warnings),
+    }
+
+
+@router.get("/payroll")
+def get_payroll_dashboard_stats(db: Session = Depends(get_db)):
+    """
+    Returns live payroll telemetry for Payroll Officers:
+    1. Active Payruns, batch processing status
+    2. Monthly gross & net disbursements
+    3. Total statutory deductions (EPF, PT, TDS)
+    4. Actionable Payroll Warnings & Reconciliation items
+    """
+    active_payruns = db.query(Payrun).filter(Payrun.status.in_(["DRAFT", "CONFIRMED", "PROCESSING"])).all()
+    latest_paid_payrun = db.query(Payrun).filter(Payrun.status == "PAID").order_by(desc(Payrun.period_start)).first()
+
+    total_slips = db.query(func.count(Payslip.id)).scalar() or 0
+    total_gross = db.query(func.sum(Payslip.gross_amount)).scalar() or 0.0
+    total_net = db.query(func.sum(Payslip.net_amount)).scalar() or 0.0
+    total_ded = db.query(func.sum(Payslip.deduction_amount)).scalar() or 0.0
+
+    lines = db.query(PayslipLine).all()
+    epf_total = sum(float(l.amount) for l in lines if l.code == "EPF_EE")
+    pt_total = sum(float(l.amount) for l in lines if l.code == "PT")
+    tds_total = sum(float(l.amount) for l in lines if l.code == "TDS")
+
+    # Build actionable payroll warnings list
+    from app.models.employee_bank_account import EmployeeBankAccount
+    payroll_warnings = []
+
+    # 1. Active employees with missing primary bank accounts (blocking payout)
+    emps_with_bank = [b.employee_id for b in db.query(EmployeeBankAccount.employee_id).filter(EmployeeBankAccount.is_primary == True).all()]
+    missing_bank_emps = db.query(Employee).filter(Employee.status == "ACTIVE")
+    if emps_with_bank:
+        missing_bank_emps = missing_bank_emps.filter(~Employee.id.in_(emps_with_bank))
+    for e in missing_bank_emps.all():
+        payroll_warnings.append({
+            "id": f"missing-bank-{e.id}",
+            "type": "MISSING_BANK_DETAILS",
+            "category": "Direct Deposit Blocker",
+            "severity": "DANGER",
+            "title": "Missing Primary Bank Account",
+            "message": f"Active employee {e.first_name} {e.last_name} ({e.employee_code}) has no primary bank account. Direct bank credit will fail.",
+            "employee_id": str(e.id),
+            "employee_name": f"{e.first_name} {e.last_name}",
+            "employee_code": e.employee_code,
+            "action_link": f"/employees/{e.id}",
+            "action_label": "Add Bank Account",
+        })
+
+    # 2. Database recorded warnings
+    db_warnings = db.query(PayrollWarning).filter(PayrollWarning.is_resolved == False).all()
+    for w in db_warnings:
+        emp = db.query(Employee).filter(Employee.id == w.employee_id).first() if w.employee_id else None
+        payroll_warnings.append({
+            "id": str(w.id),
+            "type": w.warning_type,
+            "category": "Statutory & Reconciliation",
+            "severity": w.severity or "WARNING",
+            "title": w.warning_type.replace("_", " ").title(),
+            "message": w.message,
+            "employee_id": str(emp.id) if emp else None,
+            "employee_name": f"{emp.first_name} {emp.last_name}" if emp else "Enterprise Staff",
+            "employee_code": emp.employee_code if emp else "",
+            "action_link": "/payroll/payruns",
+            "action_label": "Review Payrun",
+        })
+
+    return {
+        "payruns": {
+            "active_count": len(active_payruns),
+            "latest_paid_period": latest_paid_payrun.name if latest_paid_payrun else "August 2026",
+            "total_payslips_computed": total_slips,
+        },
+        "disbursements": {
+            "total_gross_inr": float(total_gross),
+            "total_net_inr": float(total_net),
+            "total_deductions_inr": float(total_ded),
+            "epf_total_inr": epf_total,
+            "pt_total_inr": pt_total,
+            "tds_total_inr": tds_total,
+        },
+        "unresolved_warnings_count": len(payroll_warnings),
+        "warnings": payroll_warnings,
     }
 

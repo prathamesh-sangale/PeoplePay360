@@ -8,6 +8,8 @@ from app.models.time_off_type import TimeOffType
 from app.models.employee import Employee
 from app.models.department import Department
 from app.models.user import User
+from app.models.role import Role
+from app.auth.rbac import get_current_user, normalize_role_name
 from app.api.notifications import create_system_notification
 from app.payroll.payroll_engine import (
     get_leave_type_metadata,
@@ -70,10 +72,21 @@ def list_time_off_types(db: Session = Depends(get_db)):
 
 
 @router.get("/balances/{employee_id}")
-def get_employee_balances(employee_id: int, db: Session = Depends(get_db)):
+def get_employee_balances(
+    employee_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """
     Returns unified leave balances for an employee across PL, CL, SL, and UNPAID/LOP.
+    Strictly isolated for EMPLOYEE role.
     """
+    user_role = getattr(current_user, "normalized_role", "EMPLOYEE")
+    if user_role == "EMPLOYEE":
+        emp_record = db.query(Employee).filter(Employee.user_id == current_user.id).first()
+        if not emp_record or emp_record.id != employee_id:
+            raise HTTPException(status_code=403, detail="Employees can only view their own leave balances.")
+
     emp = db.query(Employee).filter(Employee.id == employee_id).first()
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
@@ -87,16 +100,29 @@ def list_time_off_requests(
     employee_id: Optional[int] = None,
     category: Optional[str] = None,
     leave_type_id: Optional[int] = None,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    """
+    Lists time off requests. Strictly isolates records for EMPLOYEE role to authenticated employee ID.
+    """
     query = db.query(TimeOffRequest)
+    user_role = getattr(current_user, "normalized_role", "EMPLOYEE")
+    if user_role == "EMPLOYEE":
+        emp_record = db.query(Employee).filter(Employee.user_id == current_user.id).first()
+        if not emp_record:
+            return []
+        if employee_id and employee_id != emp_record.id:
+            raise HTTPException(status_code=403, detail="Employees can only view their own leave requests.")
+        query = query.filter(TimeOffRequest.employee_id == emp_record.id)
+    elif employee_id:
+        query = query.filter(TimeOffRequest.employee_id == employee_id)
+
     if status:
         if status.upper() in ["REJECTED", "REFUSED"]:
             query = query.filter(TimeOffRequest.status.in_(["REJECTED", "REFUSED"]))
         else:
             query = query.filter(TimeOffRequest.status == status.upper())
-    if employee_id:
-        query = query.filter(TimeOffRequest.employee_id == employee_id)
     if leave_type_id:
         query = query.filter(TimeOffRequest.time_off_type_id == leave_type_id)
 
@@ -149,14 +175,25 @@ def list_time_off_requests(
 
 
 @router.post("/requests")
-def create_time_off_request(payload: LeaveRequestCreate, db: Session = Depends(get_db)):
+def create_time_off_request(
+    payload: LeaveRequestCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """
     Submits a new leave request.
     - Working-day aware duration calculation.
     - Validates available balance for PL/CL/SL.
     - Allows UNPAID/LOP without allocation constraint.
-    - Triggers notifications.
+    - Strictly restricts EMPLOYEE role to submitting for themselves.
+    - Triggers notifications to HR and Admin personas.
     """
+    user_role = getattr(current_user, "normalized_role", "EMPLOYEE")
+    if user_role == "EMPLOYEE":
+        emp_record = db.query(Employee).filter(Employee.user_id == current_user.id).first()
+        if not emp_record or emp_record.id != payload.employee_id:
+            raise HTTPException(status_code=403, detail="Employees can only submit leave requests for themselves.")
+
     emp = db.query(Employee).filter(Employee.id == payload.employee_id).first()
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
@@ -231,18 +268,21 @@ def create_time_off_request(payload: LeaveRequestCreate, db: Session = Depends(g
     db.add(new_req)
     db.flush()
 
-    # Notify HR / Admin
-    admin_user = db.query(User).first()
-    if admin_user:
-        create_system_notification(
-            db,
-            user_id=admin_user.id,
-            title=f"New Leave Request: {emp.first_name} {emp.last_name}",
-            message=f"{emp.first_name} requested {duration} days of {ttype.name} ({payload.start_date} to {payload.end_date}).",
-            notification_type="LEAVE_REQUEST_SUBMITTED",
-            reference_type="time_off_request",
-            reference_id=new_req.id,
-        )
+    # Notify HR & Admin users
+    all_users = db.query(User).all()
+    for u in all_users:
+        r = db.query(Role).filter(Role.id == u.role_id).first() if u.role_id else None
+        r_name = normalize_role_name(r.name if r else "ADMIN")
+        if r_name in ["ADMIN", "HR"]:
+            create_system_notification(
+                db,
+                user_id=u.id,
+                title=f"New Leave Request: {emp.first_name} {emp.last_name}",
+                message=f"{emp.first_name} requested {duration} days of {ttype.name} ({payload.start_date} to {payload.end_date}).",
+                notification_type="LEAVE_REQUEST_SUBMITTED",
+                reference_type="time_off_request",
+                reference_id=new_req.id,
+            )
 
     db.commit()
     db.refresh(new_req)
@@ -260,11 +300,21 @@ def create_time_off_request(payload: LeaveRequestCreate, db: Session = Depends(g
 def list_time_off_allocations(
     employee_id: Optional[int] = None,
     leave_type_id: Optional[int] = None,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     query = db.query(TimeOffAllocation)
-    if employee_id:
+    user_role = getattr(current_user, "normalized_role", "EMPLOYEE")
+    if user_role == "EMPLOYEE":
+        emp_record = db.query(Employee).filter(Employee.user_id == current_user.id).first()
+        if not emp_record:
+            return []
+        if employee_id and employee_id != emp_record.id:
+            raise HTTPException(status_code=403, detail="Employees can only view their own leave allocations.")
+        query = query.filter(TimeOffAllocation.employee_id == emp_record.id)
+    elif employee_id:
         query = query.filter(TimeOffAllocation.employee_id == employee_id)
+
     if leave_type_id:
         query = query.filter(TimeOffAllocation.time_off_type_id == leave_type_id)
 

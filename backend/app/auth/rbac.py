@@ -13,28 +13,35 @@ JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "peoplepay360-super-secret-jwt-key-
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 JWT_EXPIRATION_HOURS = 24
 
-# Canonical Role Normalization Map
+# Canonical 4-Role Architecture Normalization Map
 ROLE_NORMALIZATION_MAP = {
     "ADMIN": "ADMIN",
     "SUPER_ADMIN": "ADMIN",
+    "ADMINISTRATOR": "ADMIN",
     "HR": "HR",
     "HR_MANAGER": "HR",
+    "HR_LEAD": "HR",
     "PAYROLL": "PAYROLL",
     "PAYROLL_OFFICER": "PAYROLL",
     "PAYROLL_USER": "PAYROLL",
     "PAYROLL_MANAGER": "PAYROLL",
     "EMPLOYEE": "EMPLOYEE",
+    "DEPT_MANAGER": "EMPLOYEE",
+    "DEPARTMENT_MANAGER": "EMPLOYEE",
+    "MANAGER": "EMPLOYEE",
+    "STAFF": "EMPLOYEE",
+    "USER": "EMPLOYEE",
 }
 
 security_bearer = HTTPBearer(auto_error=False)
 
 
 def normalize_role_name(raw_name: Optional[str]) -> str:
-    """Normalizes any legacy or canonical role string into one of the 4 locked roles: ADMIN, HR, PAYROLL, EMPLOYEE."""
+    """Normalizes legacy or canonical role strings into one of the 4 locked roles: ADMIN, HR, PAYROLL, EMPLOYEE."""
     if not raw_name:
         return "EMPLOYEE"
-    clean = raw_name.strip().upper()
-    return ROLE_NORMALIZATION_MAP.get(clean, clean)
+    clean = raw_name.strip().upper().replace(" ", "_")
+    return ROLE_NORMALIZATION_MAP.get(clean, "EMPLOYEE")
 
 
 def create_access_token(user_id: int, username: str, email: str, role_name: str) -> str:

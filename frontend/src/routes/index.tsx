@@ -1,5 +1,7 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 import AppShell from '../components/layout/AppShell';
+import { useRole } from '../context/RoleContext';
+import Login from '../pages/Login';
 
 import Dashboard from '../pages/Dashboard';
 import Employees from '../pages/Employees';
@@ -29,10 +31,22 @@ import Roles from '../pages/Roles';
 import Settings from '../pages/Settings';
 import AuditLogs from '../pages/AuditLogs';
 
+function ProtectedAppShell() {
+  const { isAuthenticated } = useRole();
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />;
+  }
+  return <AppShell />;
+}
+
 export const router = createBrowserRouter([
   {
+    path: '/login',
+    element: <Login />,
+  },
+  {
     path: '/',
-    element: <AppShell />,
+    element: <ProtectedAppShell />,
     children: [
       { index: true, element: <Navigate to="/dashboard" replace /> },
       { path: 'dashboard', element: <Dashboard /> },
@@ -69,5 +83,9 @@ export const router = createBrowserRouter([
       { path: 'admin/settings', element: <Settings /> },
       { path: 'admin/audit-logs', element: <AuditLogs /> },
     ]
+  },
+  {
+    path: '*',
+    element: <Navigate to="/dashboard" replace />,
   }
 ]);

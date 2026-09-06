@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Dict, List, Optional, Tuple
 from sqlalchemy.orm import Session
@@ -328,3 +328,312 @@ def get_payrun_attendance_and_lop_reconciliation(
         "lop_days": float(lop_days),
         "has_lop": lop_days > Decimal("0.00"),
     }
+
+
+def compute_payrun_batch(db: Session, payrun_id: int, current_user_id: Optional[int] = None) -> dict:
+    """
+    Computes/Generates batch payroll for a Payrun.
+    Iterates over all active employees with contracts, computes earnings, allowances,
+    statutory deductions (EPF, PT, TDS), LOP attendance reconciliation,
+    and generates/updates Payslip and PayslipLine records.
+    Transitions payrun state to COMPUTED.
+    """
+    from app.models.payrun import Payrun
+    from app.models.payrun_employee import PayrunEmployee
+    from app.models.payslip import Payslip
+    from app.models.payslip_line import PayslipLine
+    from app.models.salary_structure import SalaryStructure
+    from app.models.salary_rule import SalaryRule
+
+    payrun = db.query(Payrun).filter(Payrun.id == payrun_id).first()
+    if not payrun:
+        raise ValueError(f"Payrun with ID {payrun_id} not found.")
+
+    # All active employees
+    employees = db.query(Employee).filter(Employee.status == "ACTIVE").order_by(Employee.id).all()
+    if not employees:
+        employees = db.query(Employee).order_by(Employee.id).all()
+
+    # Pre-fetch salary structures & rules
+    all_rules = db.query(SalaryRule).all()
+    rules_by_code = {r.code: r for r in all_rules}
+    all_structs = db.query(SalaryStructure).all()
+    structs_by_id = {s.id: s for s in all_structs}
+    structs_by_code = {s.code: s for s in all_structs}
+
+    total_gross = Decimal("0.00")
+    total_net = Decimal("0.00")
+    total_deductions = Decimal("0.00")
+    slips_computed = 0
+
+    for emp in employees:
+        # Find active contract
+        contract = (
+            db.query(Contract)
+            .filter(Contract.employee_id == emp.id, Contract.status == "ACTIVE")
+            .order_by(desc(Contract.start_date))
+            .first()
+        )
+        if not contract:
+            contract = (
+                db.query(Contract)
+                .filter(Contract.employee_id == emp.id)
+                .order_by(desc(Contract.start_date))
+                .first()
+            )
+
+        if not contract:
+            # Skip employee without contract
+            continue
+
+        wage = Decimal(str(contract.wage or 50000.00))
+        struct_id = contract.salary_structure_id or payrun.salary_structure_id or 1
+        struct_obj = structs_by_id.get(struct_id)
+        struct_code = struct_obj.code if struct_obj else "IND_STD_TECH"
+
+        # Attendance & LOP Reconciliation
+        recon = get_payrun_attendance_and_lop_reconciliation(
+            db, emp.id, payrun.period_start, payrun.period_end
+        )
+        lop_days = Decimal(str(recon.get("lop_days", 0.0)))
+        working_days = recon.get("working_days", 22)
+        worked_days = Decimal(str(recon.get("worked_days", working_days)))
+
+        # -------------------------------------------------------------
+        # Compute Structure Breakdown
+        # -------------------------------------------------------------
+        lines_data = []
+
+        # 1. Executive Leadership
+        if struct_code == "IND_EXEC_LEAD":
+            basic = (wage * Decimal("0.50")).quantize(Decimal("0.01"))
+            hra = (basic * Decimal("0.50")).quantize(Decimal("0.01"))
+            car = Decimal("15000.00")
+            bonus = (wage * Decimal("0.10")).quantize(Decimal("0.01"))
+            special = max(Decimal("0.00"), wage - basic - hra - car - bonus)
+            gross = basic + hra + car + bonus + special
+            epf = min(Decimal("1800.00"), (basic * Decimal("0.12")).quantize(Decimal("0.01")))
+            pt = Decimal("200.00")
+            tds = (gross * Decimal("0.18")).quantize(Decimal("0.01"))
+            total_ded = epf + pt + tds
+            net = gross - total_ded
+
+            lines_data = [
+                ("BASIC", "Basic Salary", "BASIC", 10, "PERCENTAGE", Decimal("1.00"), Decimal("50.00"), wage, basic, "50% of Monthly CTC"),
+                ("HRA", "House Rent Allowance", "ALLOWANCE", 20, "PERCENTAGE", Decimal("1.00"), Decimal("50.00"), basic, hra, "50% of Basic Pay"),
+                ("CAR_ALLOW", "Executive Car Allowance", "ALLOWANCE", 55, "FIXED", Decimal("1.00"), None, car, car, "Fixed INR 15,000/mo"),
+                ("PERF_BONUS", "Performance Bonus", "ALLOWANCE", 80, "PERCENTAGE", Decimal("1.00"), Decimal("10.00"), wage, bonus, "10% of Gross Base"),
+                ("SPECIAL_ALLOW", "Special Allowance", "ALLOWANCE", 30, "FORMULA", Decimal("1.00"), None, special, special, "Balancing Figure"),
+                ("EPF_EE", "Employee Provident Fund (EPF)", "DEDUCTION", 110, "PERCENTAGE", Decimal("1.00"), Decimal("12.00"), basic, epf, "12% of Basic up to statutory ceiling"),
+                ("PT", "Professional Tax", "DEDUCTION", 120, "FIXED", Decimal("1.00"), None, pt, pt, "State PT Act (INR 200)"),
+                ("TDS", "Tax Deducted at Source (TDS)", "DEDUCTION", 130, "PERCENTAGE", Decimal("1.00"), Decimal("18.00"), gross, tds, "Income Tax Withholding Sec 192"),
+            ]
+
+        # 2. Sales & Business Dev
+        elif struct_code == "IND_SALES_COMM":
+            basic = (wage * Decimal("0.40")).quantize(Decimal("0.01"))
+            hra = (basic * Decimal("0.50")).quantize(Decimal("0.01"))
+            comm = (wage * Decimal("0.20")).quantize(Decimal("0.01"))
+            travel = Decimal("5000.00")
+            special = max(Decimal("0.00"), wage - basic - hra - comm - travel)
+            gross = basic + hra + comm + travel + special
+            epf = min(Decimal("1800.00"), (basic * Decimal("0.12")).quantize(Decimal("0.01")))
+            pt = Decimal("200.00")
+            tds = (gross * Decimal("0.12")).quantize(Decimal("0.01"))
+            total_ded = epf + pt + tds
+            net = gross - total_ded
+
+            lines_data = [
+                ("BASIC", "Basic Salary", "BASIC", 10, "PERCENTAGE", Decimal("1.00"), Decimal("40.00"), wage, basic, "40% of Base CTC"),
+                ("HRA", "House Rent Allowance", "ALLOWANCE", 20, "PERCENTAGE", Decimal("1.00"), Decimal("50.00"), basic, hra, "50% of Basic"),
+                ("SALES_COMM", "Sales Commission", "ALLOWANCE", 60, "PERCENTAGE", Decimal("1.00"), Decimal("20.00"), wage, comm, "20% Sales Target Achievement"),
+                ("TRAVEL_ALLOW", "Travel & Transit Allowance", "ALLOWANCE", 65, "FIXED", Decimal("1.00"), None, travel, travel, "Fixed INR 5,000/mo"),
+                ("SPECIAL_ALLOW", "Special Allowance", "ALLOWANCE", 30, "FORMULA", Decimal("1.00"), None, special, special, "Balancing Figure"),
+                ("EPF_EE", "Employee Provident Fund (EPF)", "DEDUCTION", 110, "PERCENTAGE", Decimal("1.00"), Decimal("12.00"), basic, epf, "12% of Basic"),
+                ("PT", "Professional Tax", "DEDUCTION", 120, "FIXED", Decimal("1.00"), None, pt, pt, "State PT Act (INR 200)"),
+                ("TDS", "Tax Deducted at Source (TDS)", "DEDUCTION", 130, "PERCENTAGE", Decimal("1.00"), Decimal("12.00"), gross, tds, "TDS Sec 192"),
+            ]
+
+        # 3. Operations & Shift
+        elif struct_code == "IND_OPS_SHIFT":
+            basic = (wage * Decimal("0.50")).quantize(Decimal("0.01"))
+            hra = (basic * Decimal("0.50")).quantize(Decimal("0.01"))
+            shift = Decimal("3000.00")
+            bonus = Decimal("2000.00")
+            special = max(Decimal("0.00"), wage - basic - hra - shift - bonus)
+            gross = basic + hra + shift + bonus + special
+            epf = min(Decimal("1800.00"), (basic * Decimal("0.12")).quantize(Decimal("0.01")))
+            pt = Decimal("200.00")
+            tds = (gross * Decimal("0.05")).quantize(Decimal("0.01")) if gross >= Decimal("80000.00") else Decimal("0.00")
+            total_ded = epf + pt + tds
+            net = gross - total_ded
+
+            lines_data = [
+                ("BASIC", "Basic Salary", "BASIC", 10, "PERCENTAGE", Decimal("1.00"), Decimal("50.00"), wage, basic, "50% of Base CTC"),
+                ("HRA", "House Rent Allowance", "ALLOWANCE", 20, "PERCENTAGE", Decimal("1.00"), Decimal("50.00"), basic, hra, "50% of Basic"),
+                ("SHIFT_ALLOW", "Night Shift Allowance", "ALLOWANCE", 70, "FIXED", Decimal("1.00"), None, shift, shift, "Fixed INR 3,000/mo"),
+                ("ATTEND_BONUS", "Attendance Bonus", "ALLOWANCE", 75, "FIXED", Decimal("1.00"), None, bonus, bonus, "Fixed INR 2,000/mo"),
+                ("SPECIAL_ALLOW", "Special Allowance", "ALLOWANCE", 30, "FORMULA", Decimal("1.00"), None, special, special, "Balancing Figure"),
+                ("EPF_EE", "Employee Provident Fund (EPF)", "DEDUCTION", 110, "PERCENTAGE", Decimal("1.00"), Decimal("12.00"), basic, epf, "12% of Basic"),
+                ("PT", "Professional Tax", "DEDUCTION", 120, "FIXED", Decimal("1.00"), None, pt, pt, "State PT Act (INR 200)"),
+                ("TDS", "Tax Deducted at Source (TDS)", "DEDUCTION", 130, "PERCENTAGE", Decimal("1.00"), Decimal("5.00"), gross, tds, "TDS Sec 192"),
+            ]
+
+        # 4. Consultant 194J
+        elif struct_code == "IND_CONSULTANT":
+            basic = wage
+            gross = wage
+            tds_194j = (gross * Decimal("0.10")).quantize(Decimal("0.01"))
+            total_ded = tds_194j
+            net = gross - total_ded
+
+            lines_data = [
+                ("BASIC", "Professional Retainer Fee", "BASIC", 10, "FIXED", Decimal("1.00"), None, wage, basic, "Monthly Contract Retainer Fee"),
+                ("TDS_194J", "TDS under Section 194J (10%)", "DEDUCTION", 135, "PERCENTAGE", Decimal("1.00"), Decimal("10.00"), gross, tds_194j, "10% Withholding Sec 194J"),
+            ]
+
+        # 5. Intern Stipend
+        elif struct_code == "IND_INTERN_STIPEND":
+            basic = wage
+            gross = wage
+            total_ded = Decimal("0.00")
+            net = gross
+
+            lines_data = [
+                ("BASIC", "Graduate Trainee Monthly Stipend", "BASIC", 10, "FIXED", Decimal("1.00"), None, wage, basic, "Fixed Monthly Stipend"),
+            ]
+
+        # 6. Default: Standard Tech
+        else:
+            basic = (wage * Decimal("0.50")).quantize(Decimal("0.01"))
+            hra = (basic * Decimal("0.50")).quantize(Decimal("0.01"))
+            conveyance = Decimal("1600.00")
+            medical = Decimal("1250.00")
+            special = max(Decimal("0.00"), wage - basic - hra - conveyance - medical)
+            gross = basic + hra + special + conveyance + medical
+            epf = min(Decimal("1800.00"), (basic * Decimal("0.12")).quantize(Decimal("0.01")))
+            pt = Decimal("200.00")
+            tds = (gross * Decimal("0.10")).quantize(Decimal("0.01")) if wage >= Decimal("100000.00") else (gross * Decimal("0.05")).quantize(Decimal("0.01"))
+            total_ded = epf + pt + tds
+            net = gross - total_ded
+
+            lines_data = [
+                ("BASIC", "Basic Salary", "BASIC", 10, "PERCENTAGE", Decimal("1.00"), Decimal("50.00"), wage, basic, "50% of Base CTC"),
+                ("HRA", "House Rent Allowance", "ALLOWANCE", 20, "PERCENTAGE", Decimal("1.00"), Decimal("50.00"), basic, hra, "50% of Basic Pay"),
+                ("SPECIAL_ALLOW", "Special Allowance", "ALLOWANCE", 30, "FORMULA", Decimal("1.00"), None, special, special, "Balancing Figure"),
+                ("CONVEYANCE", "Conveyance Allowance", "ALLOWANCE", 40, "FIXED", Decimal("1.00"), None, conveyance, conveyance, "Fixed INR 1,600/mo"),
+                ("MEDICAL_ALLOW", "Medical Allowance", "ALLOWANCE", 50, "FIXED", Decimal("1.00"), None, medical, medical, "Fixed INR 1,250/mo"),
+                ("EPF_EE", "Employee Provident Fund (EPF)", "DEDUCTION", 110, "PERCENTAGE", Decimal("1.00"), Decimal("12.00"), basic, epf, "12% of Basic up to statutory ceiling"),
+                ("PT", "Professional Tax", "DEDUCTION", 120, "FIXED", Decimal("1.00"), None, pt, pt, "State PT Act (INR 200)"),
+                ("TDS", "Tax Deducted at Source (TDS)", "DEDUCTION", 130, "PERCENTAGE", Decimal("1.00"), Decimal("10.00"), gross, tds, "Income Tax Withholding Sec 192"),
+            ]
+
+        # Apply LOP if exists
+        if lop_days > Decimal("0.00"):
+            work_days_dec = max(Decimal("1.00"), Decimal(str(working_days)))
+            lop_amt = ((basic / work_days_dec) * lop_days).quantize(Decimal("0.01"))
+            lines_data.append(
+                ("LOP", f"Loss of Pay ({lop_days} days LOP)", "DEDUCTION", 140, "FORMULA", lop_days, None, basic, lop_amt, f"(Basic / {work_days_dec}) * {lop_days} LOP days")
+            )
+            total_ded += lop_amt
+            net -= lop_amt
+
+        # -------------------------------------------------------------
+        # Persist PayrunEmployee & Payslip
+        # -------------------------------------------------------------
+        payrun_emp = (
+            db.query(PayrunEmployee)
+            .filter(PayrunEmployee.payrun_id == payrun.id, PayrunEmployee.employee_id == emp.id)
+            .first()
+        )
+        if not payrun_emp:
+            payrun_emp = PayrunEmployee(
+                payrun_id=payrun.id,
+                employee_id=emp.id,
+                selection_status="SELECTED",
+            )
+            db.add(payrun_emp)
+            db.flush()
+
+        payslip = (
+            db.query(Payslip)
+            .filter(Payslip.payrun_id == payrun.id, Payslip.employee_id == emp.id)
+            .first()
+        )
+        if not payslip:
+            payslip = Payslip(
+                payrun_id=payrun.id,
+                employee_id=emp.id,
+                payrun_employee_id=payrun_emp.id,
+                salary_structure_id=struct_id,
+                contract_id=contract.id,
+                period_start=payrun.period_start,
+                period_end=payrun.period_end,
+                worked_days=worked_days,
+                basic_amount=basic,
+                gross_amount=gross,
+                deduction_amount=total_ded,
+                contribution_amount=epf if "epf" in locals() else Decimal("0.00"),
+                net_amount=net,
+                status="COMPUTED",
+            )
+            db.add(payslip)
+            db.flush()
+        else:
+            payslip.contract_id = contract.id
+            payslip.salary_structure_id = struct_id
+            payslip.worked_days = worked_days
+            payslip.basic_amount = basic
+            payslip.gross_amount = gross
+            payslip.deduction_amount = total_ded
+            payslip.contribution_amount = epf if "epf" in locals() else Decimal("0.00")
+            payslip.net_amount = net
+            payslip.status = "COMPUTED"
+            # Delete old lines for recomputation
+            db.query(PayslipLine).filter(PayslipLine.payslip_id == payslip.id).delete()
+            db.flush()
+
+        # Add itemized PayslipLine records
+        for code, name, category, seq, calc_type, qty, rate_val, base_amt, amt, formula_desc in lines_data:
+            s_rule = rules_by_code.get(code)
+            p_line = PayslipLine(
+                payslip_id=payslip.id,
+                salary_rule_id=s_rule.id if s_rule else None,
+                name=name,
+                code=code,
+                category=category,
+                sequence=seq,
+                calculation_type=calc_type,
+                quantity=qty,
+                rate=rate_val,
+                base_amount=base_amt,
+                amount=amt,
+                formula_snapshot=formula_desc,
+            )
+            db.add(p_line)
+
+        total_gross += gross
+        total_net += net
+        total_deductions += total_ded
+        slips_computed += 1
+
+    # Transition Payrun to COMPUTED
+    payrun.computed_at = datetime.now(timezone.utc)
+    if payrun.status == "DRAFT":
+        payrun.status = "COMPUTED"
+    db.commit()
+    db.refresh(payrun)
+
+    return {
+        "status": "success",
+        "message": f"Successfully computed batch payrun '{payrun.name}'. Generated {slips_computed} employee payslips.",
+        "payrun_id": payrun.id,
+        "payrun_name": payrun.name,
+        "payrun_status": payrun.status,
+        "slips_count": slips_computed,
+        "total_gross": float(total_gross),
+        "total_net": float(total_net),
+        "total_deductions": float(total_deductions),
+        "computed_at": payrun.computed_at.isoformat() if payrun.computed_at else None,
+    }
+

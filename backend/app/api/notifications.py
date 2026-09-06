@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from app.database import get_db
-from app.models.notification import Notification
+from app.auth.rbac import get_current_user
 from app.models.user import User
+from app.models.notification import Notification
 from typing import Optional
 from datetime import datetime, timezone
 
@@ -38,11 +39,14 @@ def list_notifications(
     user_id: Optional[int] = None,
     unread_only: bool = False,
     limit: int = 50,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    query = db.query(Notification)
-    if user_id:
-        query = query.filter(Notification.user_id == user_id)
+    target_user_id = user_id or current_user.id
+    if getattr(current_user, "normalized_role", "EMPLOYEE") == "EMPLOYEE":
+        target_user_id = current_user.id
+
+    query = db.query(Notification).filter(Notification.user_id == target_user_id)
     if unread_only:
         query = query.filter(Notification.is_read == False)
 
@@ -64,10 +68,10 @@ def list_notifications(
     ]
     
     # Calculate unread count
-    count_query = db.query(Notification).filter(Notification.is_read == False)
-    if user_id:
-        count_query = count_query.filter(Notification.user_id == user_id)
-    unread_count = count_query.count()
+    unread_count = db.query(Notification).filter(
+        Notification.user_id == target_user_id,
+        Notification.is_read == False,
+    ).count()
 
     return {"unread_count": unread_count, "items": results}
 

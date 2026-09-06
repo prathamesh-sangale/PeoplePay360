@@ -1,6 +1,15 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getEmployees, getMetaDepartments, getMetaJobs, getMetaTypes, createEmployee } from '../lib/api';
+import {
+  getEmployees,
+  getMetaDepartments,
+  getMetaJobs,
+  getMetaTypes,
+  createEmployee,
+  updateEmployee,
+  getSalaryStructures,
+  getSchedules,
+} from '../lib/api';
 import { formatINR, getStatusBadgeClass } from '../lib/formatters';
 import { Link } from 'react-router-dom';
 import {
@@ -16,6 +25,8 @@ import {
   AlertCircle,
   LayoutGrid,
   List,
+  IndianRupee,
+  Pencil,
 } from 'lucide-react';
 
 export default function Employees() {
@@ -34,11 +45,37 @@ export default function Employees() {
   const [departmentId, setDepartmentId] = useState('');
   const [jobId, setJobId] = useState('');
   const [employeeTypeId, setEmployeeTypeId] = useState('');
+  const [managerId, setManagerId] = useState('');
+  const [salaryStructureId, setSalaryStructureId] = useState('');
+  const [workingScheduleId, setWorkingScheduleId] = useState('');
+  const [initialWage, setInitialWage] = useState('75000');
+  const [dateOfBirth, setDateOfBirth] = useState('1995-01-01');
   const [dateOfJoining, setDateOfJoining] = useState(new Date().toISOString().split('T')[0]);
-  const [workLocation, setWorkLocation] = useState('Bengaluru HQ');
+  const [workLocation, setWorkLocation] = useState('');
   const [panNumber, setPanNumber] = useState('');
   const [aadhaarNumber, setAadhaarNumber] = useState('');
   const [formError, setFormError] = useState('');
+
+  // Edit Employee State
+  const [editingEmployee, setEditingEmployee] = useState<any | null>(null);
+  const [editFirstName, setEditFirstName] = useState('');
+  const [editLastName, setEditLastName] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editWorkLocation, setEditWorkLocation] = useState('');
+  const [editDepartmentId, setEditDepartmentId] = useState('');
+  const [editJobId, setEditJobId] = useState('');
+  const [editStatus, setEditStatus] = useState('ACTIVE');
+  const [editError, setEditError] = useState('');
+
+  const DEPT_LOCATION_MAP: Record<string, string> = {
+    ENG: 'Bengaluru, Karnataka',
+    PROD: 'Bengaluru, Karnataka',
+    HR: 'Bengaluru, Karnataka',
+    FIN: 'Mumbai, Maharashtra',
+    SALES: 'Delhi NCR (Gurugram)',
+    OPS: 'Hyderabad, Telangana',
+  };
 
   const { data: departments } = useQuery({
     queryKey: ['meta-departments'],
@@ -53,6 +90,21 @@ export default function Employees() {
   const { data: types } = useQuery({
     queryKey: ['meta-types'],
     queryFn: getMetaTypes,
+  });
+
+  const { data: structures } = useQuery({
+    queryKey: ['salary-structures'],
+    queryFn: getSalaryStructures,
+  });
+
+  const { data: schedules } = useQuery({
+    queryKey: ['schedules'],
+    queryFn: getSchedules,
+  });
+
+  const { data: employeesList } = useQuery({
+    queryKey: ['employees-active-meta'],
+    queryFn: () => getEmployees({ status: 'ACTIVE' }),
   });
 
   const { data: employees, isLoading, error } = useQuery({
@@ -71,10 +123,27 @@ export default function Employees() {
       setIsModalOpen(false);
       resetForm();
       queryClient.invalidateQueries({ queryKey: ['employees'] });
+      queryClient.invalidateQueries({ queryKey: ['contracts'] });
+      queryClient.invalidateQueries({ queryKey: ['schedules'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard-hr-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
     },
     onError: (err: any) => {
       setFormError(err.message || 'Failed to create employee profile.');
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: string | number; payload: any }) => updateEmployee(id, payload),
+    onSuccess: () => {
+      setEditingEmployee(null);
+      queryClient.invalidateQueries({ queryKey: ['employees'] });
+      queryClient.invalidateQueries({ queryKey: ['employee-detail'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-hr-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] });
+    },
+    onError: (err: any) => {
+      setEditError(err.message || 'Failed to update employee profile.');
     },
   });
 
@@ -86,8 +155,13 @@ export default function Employees() {
     setDepartmentId('');
     setJobId('');
     setEmployeeTypeId('');
+    setManagerId('');
+    setSalaryStructureId('');
+    setWorkingScheduleId('');
+    setInitialWage('75000');
+    setDateOfBirth('1995-01-01');
     setDateOfJoining(new Date().toISOString().split('T')[0]);
-    setWorkLocation('Bengaluru HQ');
+    setWorkLocation('');
     setPanNumber('');
     setAadhaarNumber('');
     setFormError('');
@@ -95,10 +169,69 @@ export default function Employees() {
 
   const handleOpenCreate = () => {
     resetForm();
-    if (departments && departments.length > 0) setDepartmentId(String(departments[0].id));
+    if (departments && departments.length > 0) {
+      setDepartmentId(String(departments[0].id));
+      setWorkLocation(DEPT_LOCATION_MAP[departments[0].code] || 'Bengaluru, Karnataka');
+    }
     if (jobs && jobs.length > 0) setJobId(String(jobs[0].id));
     if (types && types.length > 0) setEmployeeTypeId(String(types[0].id));
+    if (structures && structures.length > 0) setSalaryStructureId(String(structures[0].id));
+    if (schedules && schedules.length > 0) setWorkingScheduleId(String(schedules[0].id));
     setIsModalOpen(true);
+  };
+
+  const handleDepartmentChange = (deptId: string) => {
+    setDepartmentId(deptId);
+    // CRITICAL: NEVER overwrite user-typed workLocation / address!
+    // Only autofill if workLocation is currently blank
+    if (!workLocation || workLocation.trim() === '') {
+      const found = departments?.find((d: any) => String(d.id) === String(deptId));
+      if (found && DEPT_LOCATION_MAP[found.code]) {
+        setWorkLocation(DEPT_LOCATION_MAP[found.code]);
+      }
+    }
+  };
+
+  const handleOpenEdit = (e: React.MouseEvent, emp: any) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setEditingEmployee(emp);
+    setEditFirstName(emp.first_name || '');
+    setEditLastName(emp.last_name || '');
+    setEditEmail(emp.email || '');
+    setEditPhone(emp.phone || '');
+    setEditWorkLocation(emp.work_location || '');
+    setEditDepartmentId(emp.department?.id ? String(emp.department.id) : '');
+    setEditJobId(emp.job?.id ? String(emp.job.id) : '');
+    setEditStatus(emp.status || 'ACTIVE');
+    setEditError('');
+  };
+
+  const handleSaveEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingEmployee) return;
+    setEditError('');
+    if (!editFirstName.trim() || !editLastName.trim()) {
+      setEditError('First and Last names are required.');
+      return;
+    }
+    if (!editEmail.trim()) {
+      setEditError('Valid email address is required.');
+      return;
+    }
+    updateMutation.mutate({
+      id: editingEmployee.id,
+      payload: {
+        first_name: editFirstName.trim(),
+        last_name: editLastName.trim(),
+        email: editEmail.trim().toLowerCase(),
+        phone: editPhone.trim() || undefined,
+        work_location: editWorkLocation.trim(),
+        department_id: editDepartmentId ? Number(editDepartmentId) : undefined,
+        job_id: editJobId ? Number(editJobId) : undefined,
+        status: editStatus,
+      },
+    });
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -125,6 +258,11 @@ export default function Employees() {
       department_id: Number(departmentId),
       job_id: Number(jobId),
       employee_type_id: employeeTypeId ? Number(employeeTypeId) : undefined,
+      manager_id: managerId ? Number(managerId) : undefined,
+      salary_structure_id: salaryStructureId ? Number(salaryStructureId) : undefined,
+      working_schedule_id: workingScheduleId ? Number(workingScheduleId) : undefined,
+      initial_wage: initialWage ? Number(initialWage) : 75000,
+      date_of_birth: dateOfBirth,
       date_of_joining: dateOfJoining,
       work_location: workLocation.trim(),
       pan_number: panNumber.trim().toUpperCase() || undefined,
@@ -291,8 +429,17 @@ export default function Employees() {
                     {emp.wage ? formatINR(emp.wage) : 'Contract Pending'}
                   </span>
                 </div>
-                <div className="flex items-center gap-1 text-xs font-semibold text-primary group-hover:translate-x-1 transition-transform">
-                  View Profile <ChevronRight size={14} />
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={(e) => handleOpenEdit(e, emp)}
+                    className="px-2.5 py-1 rounded-lg bg-secondary hover:bg-accent text-secondary-foreground text-[11px] font-semibold flex items-center gap-1 border border-border/80 transition-colors"
+                    title="Edit Profile & Address"
+                  >
+                    <Pencil size={11} /> Edit
+                  </button>
+                  <div className="flex items-center gap-1 text-xs font-semibold text-primary group-hover:translate-x-1 transition-transform">
+                    View Profile <ChevronRight size={14} />
+                  </div>
                 </div>
               </div>
             </Link>
@@ -311,7 +458,7 @@ export default function Employees() {
                   <th className="py-3 px-4">Work Location</th>
                   <th className="py-3 px-4">Monthly CTC</th>
                   <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4 text-right">Action</th>
+                  <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/60">
@@ -335,12 +482,21 @@ export default function Employees() {
                       </span>
                     </td>
                     <td className="py-3.5 px-4 text-right">
-                      <Link
-                        to={`/employees/${emp.id}`}
-                        className="px-3 py-1 bg-secondary text-secondary-foreground text-xs font-semibold rounded-lg hover:bg-secondary/80 border border-border inline-flex items-center gap-1"
-                      >
-                        Profile →
-                      </Link>
+                      <div className="inline-flex items-center gap-1.5">
+                        <button
+                          onClick={(e) => handleOpenEdit(e, emp)}
+                          className="px-2.5 py-1 bg-secondary text-secondary-foreground text-xs font-semibold rounded-lg hover:bg-secondary/80 border border-border inline-flex items-center gap-1"
+                          title="Edit Profile & Address"
+                        >
+                          <Pencil size={11} /> Edit
+                        </button>
+                        <Link
+                          to={`/employees/${emp.id}`}
+                          className="px-3 py-1 bg-primary text-primary-foreground text-xs font-semibold rounded-lg hover:opacity-90 shadow-xs inline-flex items-center gap-1"
+                        >
+                          Profile →
+                        </Link>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -425,7 +581,7 @@ export default function Employees() {
                   <label className="font-semibold text-muted-foreground block mb-1">Department *</label>
                   <select
                     value={departmentId}
-                    onChange={(e) => setDepartmentId(e.target.value)}
+                    onChange={(e) => handleDepartmentChange(e.target.value)}
                     className="w-full p-2.5 rounded-xl border border-input bg-background focus:ring-1 focus:ring-primary focus:outline-none text-foreground font-medium"
                   >
                     {departments?.map((d: any) => (
@@ -467,6 +623,84 @@ export default function Employees() {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
+                  <label className="font-semibold text-muted-foreground block mb-1">Reporting Manager (Optional)</label>
+                  <select
+                    value={managerId}
+                    onChange={(e) => setManagerId(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-input bg-background focus:ring-1 focus:ring-primary focus:outline-none text-foreground font-medium"
+                  >
+                    <option value="">No Direct Manager</option>
+                    {employeesList?.map((emp: any) => (
+                      <option key={emp.id} value={emp.id}>
+                        {emp.full_name || `${emp.first_name} ${emp.last_name}`} ({emp.job?.name || emp.department?.name || ''} • {emp.employee_code})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="font-semibold text-muted-foreground block mb-1">Date of Birth</label>
+                  <input
+                    type="date"
+                    value={dateOfBirth}
+                    onChange={(e) => setDateOfBirth(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-input bg-background focus:ring-1 focus:ring-primary focus:outline-none text-foreground font-mono"
+                  >
+                  </input>
+                </div>
+              </div>
+
+              {/* Compensation & Roster Structure (HR -> Payroll Sync) */}
+              <div className="p-3.5 rounded-2xl bg-accent/20 border border-border/80 space-y-3">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-foreground">
+                  <IndianRupee size={14} className="text-primary" /> Compensation & Roster Mapping (HR → Payroll Sync)
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="font-semibold text-muted-foreground block mb-1 text-[11px]">Monthly Gross Wage (₹) *</label>
+                    <input
+                      type="number"
+                      required
+                      min={1000}
+                      step={500}
+                      placeholder="e.g. 75000"
+                      value={initialWage}
+                      onChange={(e) => setInitialWage(e.target.value)}
+                      className="w-full p-2.5 rounded-xl border border-input bg-background focus:ring-1 focus:ring-primary focus:outline-none text-foreground font-mono font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="font-semibold text-muted-foreground block mb-1 text-[11px]">Salary Structure *</label>
+                    <select
+                      value={salaryStructureId}
+                      onChange={(e) => setSalaryStructureId(e.target.value)}
+                      className="w-full p-2.5 rounded-xl border border-input bg-background focus:ring-1 focus:ring-primary focus:outline-none text-foreground font-medium text-xs"
+                    >
+                      {structures?.map((s: any) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name} ({s.code})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="font-semibold text-muted-foreground block mb-1 text-[11px]">Working Schedule / Shift *</label>
+                    <select
+                      value={workingScheduleId}
+                      onChange={(e) => setWorkingScheduleId(e.target.value)}
+                      className="w-full p-2.5 rounded-xl border border-input bg-background focus:ring-1 focus:ring-primary focus:outline-none text-foreground font-medium text-xs"
+                    >
+                      {schedules?.map((sc: any) => (
+                        <option key={sc.id} value={sc.id}>
+                          {sc.name} ({sc.weekly_hours}h)
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
                   <label className="font-semibold text-muted-foreground block mb-1">Date of Joining</label>
                   <input
                     type="date"
@@ -477,13 +711,39 @@ export default function Employees() {
                   />
                 </div>
                 <div>
-                  <label className="font-semibold text-muted-foreground block mb-1">Work Location</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="font-semibold text-muted-foreground block">Work Location / Office Address</label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const found = departments?.find((d: any) => String(d.id) === String(departmentId));
+                        if (found && DEPT_LOCATION_MAP[found.code]) {
+                          setWorkLocation(DEPT_LOCATION_MAP[found.code]);
+                        }
+                      }}
+                      className="text-[10px] text-primary hover:underline font-medium"
+                    >
+                      Use Dept Hub
+                    </button>
+                  </div>
                   <input
                     type="text"
+                    list="work-location-suggestions"
+                    placeholder="e.g. Pune Tech Park, Hinjawadi Phase 2, Pune 411057"
                     value={workLocation}
                     onChange={(e) => setWorkLocation(e.target.value)}
-                    className="w-full p-2.5 rounded-xl border border-input bg-background focus:ring-1 focus:ring-primary focus:outline-none text-foreground"
+                    className="w-full p-2.5 rounded-xl border border-input bg-background focus:ring-1 focus:ring-primary focus:outline-none text-foreground font-medium"
                   />
+                  <datalist id="work-location-suggestions">
+                    <option value="Bengaluru, Karnataka" />
+                    <option value="Mumbai, Maharashtra" />
+                    <option value="Delhi NCR (Gurugram)" />
+                    <option value="Hyderabad, Telangana" />
+                    <option value="Pune, Maharashtra" />
+                    <option value="Chennai, Tamil Nadu" />
+                    <option value="Noida, Uttar Pradesh" />
+                    <option value="Kolkata, West Bengal" />
+                  </datalist>
                 </div>
               </div>
 
@@ -526,6 +786,177 @@ export default function Employees() {
                   className="px-4 py-2 bg-primary text-primary-foreground font-semibold rounded-xl text-xs hover:opacity-90 shadow-sm"
                 >
                   {createMutation.isPending ? 'Creating...' : 'Create Employee Profile'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT EMPLOYEE MODAL */}
+      {editingEmployee && (
+        <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-card border border-border p-6 rounded-3xl max-w-xl w-full shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-2 border-b border-border">
+              <div className="flex items-center gap-2 text-primary font-bold text-base">
+                <Pencil size={18} />
+                <h3 className="text-foreground">Edit Employee Profile & Address</h3>
+              </div>
+              <button onClick={() => setEditingEmployee(null)} className="text-muted-foreground hover:text-foreground text-sm font-bold">
+                ✕
+              </button>
+            </div>
+
+            {editError && (
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-500 text-xs flex items-center gap-2">
+                <AlertCircle size={16} /> {editError}
+              </div>
+            )}
+
+            <form onSubmit={handleSaveEdit} className="space-y-4 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="font-semibold text-muted-foreground block mb-1">First Name *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editFirstName}
+                    onChange={(e) => setEditFirstName(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-input bg-background focus:ring-1 focus:ring-primary focus:outline-none text-foreground font-medium"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold text-muted-foreground block mb-1">Last Name *</label>
+                  <input
+                    type="text"
+                    required
+                    value={editLastName}
+                    onChange={(e) => setEditLastName(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-input bg-background focus:ring-1 focus:ring-primary focus:outline-none text-foreground font-medium"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="font-semibold text-muted-foreground block mb-1">Work Email *</label>
+                  <input
+                    type="email"
+                    required
+                    value={editEmail}
+                    onChange={(e) => setEditEmail(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-input bg-background focus:ring-1 focus:ring-primary focus:outline-none text-foreground"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold text-muted-foreground block mb-1">Phone Number</label>
+                  <input
+                    type="text"
+                    value={editPhone}
+                    onChange={(e) => setEditPhone(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-input bg-background focus:ring-1 focus:ring-primary focus:outline-none text-foreground"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="font-semibold text-muted-foreground block mb-1">Department</label>
+                  <select
+                    value={editDepartmentId}
+                    onChange={(e) => setEditDepartmentId(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-input bg-background focus:ring-1 focus:ring-primary focus:outline-none text-foreground font-medium"
+                  >
+                    {departments?.map((d: any) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="font-semibold text-muted-foreground block mb-1">Job Title</label>
+                  <select
+                    value={editJobId}
+                    onChange={(e) => setEditJobId(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-input bg-background focus:ring-1 focus:ring-primary focus:outline-none text-foreground font-medium"
+                  >
+                    {jobs?.map((j: any) => (
+                      <option key={j.id} value={j.id}>
+                        {j.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="font-semibold text-muted-foreground block mb-1">Status</label>
+                  <select
+                    value={editStatus}
+                    onChange={(e) => setEditStatus(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-input bg-background focus:ring-1 focus:ring-primary focus:outline-none text-foreground font-medium"
+                  >
+                    <option value="ACTIVE">ACTIVE</option>
+                    <option value="INACTIVE">INACTIVE</option>
+                    <option value="ON_LEAVE">ON_LEAVE</option>
+                    <option value="PROBATION">PROBATION</option>
+                    <option value="SUSPENDED">SUSPENDED</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-semibold text-muted-foreground block">Work Location / Office Address</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const found = departments?.find((d: any) => String(d.id) === String(editDepartmentId));
+                      if (found && DEPT_LOCATION_MAP[found.code]) {
+                        setEditWorkLocation(DEPT_LOCATION_MAP[found.code]);
+                      }
+                    }}
+                    className="text-[10px] text-primary hover:underline font-medium"
+                  >
+                    Use Dept Hub
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  list="edit-work-location-suggestions"
+                  placeholder="e.g. Flat 402, Green Glen Layout, Bellandur, Bengaluru 560103"
+                  value={editWorkLocation}
+                  onChange={(e) => setEditWorkLocation(e.target.value)}
+                  className="w-full p-2.5 rounded-xl border border-input bg-background focus:ring-1 focus:ring-primary focus:outline-none text-foreground font-medium"
+                />
+                <datalist id="edit-work-location-suggestions">
+                  <option value="Bengaluru, Karnataka" />
+                  <option value="Mumbai, Maharashtra" />
+                  <option value="Delhi NCR (Gurugram)" />
+                  <option value="Hyderabad, Telangana" />
+                  <option value="Pune, Maharashtra" />
+                  <option value="Chennai, Tamil Nadu" />
+                  <option value="Noida, Uttar Pradesh" />
+                  <option value="Kolkata, West Bengal" />
+                </datalist>
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Custom addresses, street names, and postal pins entered here will remain permanently saved.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-border">
+                <button
+                  type="button"
+                  onClick={() => setEditingEmployee(null)}
+                  className="px-4 py-2 rounded-xl text-muted-foreground hover:bg-accent text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={updateMutation.isPending}
+                  className="px-4 py-2 bg-primary text-primary-foreground font-semibold rounded-xl text-xs hover:opacity-90 shadow-sm flex items-center gap-1.5"
+                >
+                  {updateMutation.isPending ? 'Saving...' : 'Save Profile Changes'}
                 </button>
               </div>
             </form>

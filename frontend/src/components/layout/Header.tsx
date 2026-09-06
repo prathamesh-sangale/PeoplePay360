@@ -13,20 +13,25 @@ import {
   Briefcase,
   User,
   CheckCircle2,
+  LogOut,
+  Sparkles,
+  Zap,
 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getNotifications, markNotificationRead, markAllNotificationsRead } from '../../lib/api';
-import { useRole, type UserPersona } from '../../context/RoleContext';
+import { getNotifications, markNotificationRead, markAllNotificationsRead, loginWithCredentials } from '../../lib/api';
+import { useRole, CANONICAL_PERSONAS, type UserPersona } from '../../context/RoleContext';
 import { Link, useNavigate } from 'react-router-dom';
 
 export default function Header() {
   const [isNotifOpen, setIsNotifOpen] = useState(false);
-  const [isRoleMenuOpen, setIsRoleMenuOpen] = useState(false);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [isQuickSwitchOpen, setIsQuickSwitchOpen] = useState(false);
   const notifDropdownRef = useRef<HTMLDivElement>(null);
-  const roleDropdownRef = useRef<HTMLDivElement>(null);
+  const userDropdownRef = useRef<HTMLDivElement>(null);
+  const quickSwitchRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const { currentPersona, currentRole, switchPersona, personas } = useRole();
+  const { currentPersona, currentRole, login, switchPersona, logout } = useRole();
 
   const { data: notifData } = useQuery({
     queryKey: ['notifications'],
@@ -56,13 +61,37 @@ export default function Header() {
       if (notifDropdownRef.current && !notifDropdownRef.current.contains(event.target as Node)) {
         setIsNotifOpen(false);
       }
-      if (roleDropdownRef.current && !roleDropdownRef.current.contains(event.target as Node)) {
-        setIsRoleMenuOpen(false);
+      if (userDropdownRef.current && !userDropdownRef.current.contains(event.target as Node)) {
+        setIsUserMenuOpen(false);
+      }
+      if (quickSwitchRef.current && !quickSwitchRef.current.contains(event.target as Node)) {
+        setIsQuickSwitchOpen(false);
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  const handleQuickSwitch = async (persona: UserPersona) => {
+    setIsQuickSwitchOpen(false);
+    try {
+      const res = await loginWithCredentials({
+        email: persona.email,
+        password: 'password123',
+      });
+      if (res && res.access_token) {
+        login(res.access_token, res.user);
+        queryClient.invalidateQueries();
+        navigate('/dashboard');
+        return;
+      }
+    } catch {
+      // Fallback to client-side switch
+      switchPersona(persona);
+      queryClient.invalidateQueries();
+      navigate('/dashboard');
+    }
+  };
 
   const unreadCount = notifData?.unread_count || 0;
   const items = notifData?.items || [];
@@ -95,12 +124,11 @@ export default function Header() {
     }
   };
 
-  const handlePersonaSwitch = (p: UserPersona) => {
-    switchPersona(p);
-    setIsRoleMenuOpen(false);
-    queryClient.invalidateQueries();
-    // Refresh to dashboard to present the updated role portal
-    navigate('/dashboard');
+  const handleLogout = () => {
+    logout();
+    queryClient.clear();
+    setIsUserMenuOpen(false);
+    navigate('/login');
   };
 
   return (
@@ -122,14 +150,88 @@ export default function Header() {
         </span>
       </div>
 
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3">
         <div className="relative hidden md:block">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <input
             type="text"
             placeholder="Search employees, leaves, contracts..."
-            className="h-9 w-60 rounded-xl border border-input bg-background px-9 py-1 text-xs shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary text-foreground"
+            className="h-9 w-52 rounded-xl border border-input bg-background px-9 py-1 text-xs shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary text-foreground"
           />
+        </div>
+
+        {/* Fast Role / Persona Quick Switch Dropdown Menu */}
+        <div className="relative" ref={quickSwitchRef}>
+          <button
+            onClick={() => setIsQuickSwitchOpen(!isQuickSwitchOpen)}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-primary/30 bg-primary/10 hover:bg-primary/20 text-foreground text-xs font-bold transition-all shadow-xs cursor-pointer"
+            title="Switch Role / Persona instantly"
+          >
+            <Zap size={14} className="text-amber-400 fill-amber-400" />
+            <span className="hidden lg:inline text-muted-foreground font-normal">Switch Role:</span>
+            <span className="font-extrabold text-foreground truncate max-w-[120px] sm:max-w-[160px]">
+              {currentPersona.full_name}
+            </span>
+            <ChevronDown size={13} className="text-muted-foreground shrink-0" />
+          </button>
+
+          {isQuickSwitchOpen && (
+            <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl bg-card border border-border shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200 z-50 p-2">
+              <div className="p-3 border-b border-border bg-accent/20 rounded-xl mb-2 flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                    <Zap size={14} className="text-amber-400 fill-amber-400" /> Fast Role Switcher
+                  </div>
+                  <div className="text-[10px] text-muted-foreground mt-0.5">
+                    Instantly switch between Admin, HR, Payroll, and Employee portals
+                  </div>
+                </div>
+                <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-primary/10 text-primary border border-primary/20">
+                  {CANONICAL_PERSONAS.length} Accounts
+                </span>
+              </div>
+
+              <div className="max-h-[380px] overflow-y-auto space-y-1 pr-1">
+                {CANONICAL_PERSONAS.map((p) => {
+                  const isActive = currentPersona.email.toLowerCase() === p.email.toLowerCase();
+                  return (
+                    <button
+                      key={`${p.role}-${p.user_id}`}
+                      onClick={() => handleQuickSwitch(p)}
+                      className={`w-full p-2.5 rounded-xl text-left transition-all flex items-center justify-between gap-2.5 cursor-pointer ${
+                        isActive
+                          ? 'bg-primary/15 border border-primary/40 text-foreground shadow-xs'
+                          : 'hover:bg-accent/60 text-muted-foreground hover:text-foreground border border-transparent'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="p-2 rounded-xl bg-card border border-border shrink-0 shadow-xs">
+                          {getRoleIcon(p.role)}
+                        </div>
+                        <div className="min-w-0 truncate">
+                          <div className="text-xs font-bold text-foreground truncate flex items-center gap-1.5">
+                            {p.full_name}
+                            {isActive && (
+                              <span className="text-[9px] px-1.5 py-0.2 rounded-md bg-emerald-500/15 text-emerald-500 font-bold border border-emerald-500/30">
+                                Active
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[10px] text-muted-foreground truncate mt-0.5">
+                            {p.display_title || p.role} • {p.department}
+                          </div>
+                        </div>
+                      </div>
+
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 border ${p.badge_color}`}>
+                        {p.role}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Interactive Notification Bell */}
@@ -226,11 +328,11 @@ export default function Header() {
           )}
         </div>
 
-        {/* Interactive Persona Switcher Dropdown */}
-        <div className="relative" ref={roleDropdownRef}>
+        {/* Logged In User Profile & Sign Out Menu */}
+        <div className="relative" ref={userDropdownRef}>
           <button
-            onClick={() => setIsRoleMenuOpen(!isRoleMenuOpen)}
-            className="flex items-center gap-2 p-1.5 pl-2.5 pr-3 rounded-2xl hover:bg-accent/50 transition-all border border-border bg-card shadow-xs focus:outline-none"
+            onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
+            className="flex items-center gap-2 p-1.5 pl-2.5 pr-3 rounded-2xl hover:bg-accent/50 transition-all border border-border bg-card shadow-xs focus:outline-none cursor-pointer"
           >
             <div className="h-7 w-7 rounded-xl bg-gradient-to-tr from-primary to-indigo-600 flex items-center justify-center text-xs font-bold text-primary-foreground shadow-xs">
               {currentPersona.avatar_initials}
@@ -246,53 +348,42 @@ export default function Header() {
             <ChevronDown size={14} className="text-muted-foreground ml-1" />
           </button>
 
-          {isRoleMenuOpen && (
-            <div className="absolute right-0 mt-2 w-80 rounded-2xl bg-card border border-border shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200 z-50 p-2">
-              <div className="p-3 border-b border-border bg-accent/20 rounded-xl mb-2">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-                  Switch Role Persona (Testing & Demo)
+          {isUserMenuOpen && (
+            <div className="absolute right-0 mt-2 w-64 rounded-2xl bg-card border border-border shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200 z-50 p-2">
+              <div className="p-3 border-b border-border bg-accent/20 rounded-xl mb-1.5">
+                <div className="text-xs font-bold text-foreground truncate">
+                  {currentPersona.full_name}
                 </div>
-                <div className="text-xs text-muted-foreground mt-0.5">
-                  Select a persona to test role-specific dashboards, permissions, and sidebar navigation.
+                <div className="text-[11px] text-muted-foreground truncate mt-0.5">
+                  {currentPersona.email}
+                </div>
+                <div className="mt-2 flex items-center gap-1.5">
+                  <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${currentPersona.badge_color}`}>
+                    {currentRole}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">
+                    {currentPersona.department}
+                  </span>
                 </div>
               </div>
 
               <div className="space-y-1">
-                {personas.map((p) => {
-                  const isSelected = p.role === currentRole;
-                  return (
-                    <div
-                      key={p.role}
-                      onClick={() => handlePersonaSwitch(p)}
-                      className={`p-3 rounded-xl cursor-pointer transition-all flex items-start justify-between gap-2.5 ${
-                        isSelected
-                          ? 'bg-primary/10 border border-primary/30 text-foreground shadow-xs'
-                          : 'hover:bg-accent/40 text-muted-foreground hover:text-foreground'
-                      }`}
-                    >
-                      <div className="flex items-start gap-2.5">
-                        <div className="h-8 w-8 rounded-xl bg-background border border-border flex items-center justify-center text-xs font-bold text-foreground shrink-0 shadow-xs mt-0.5">
-                          {p.avatar_initials}
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-xs font-bold text-foreground">{p.full_name}</span>
-                            <span className={`text-[9px] px-1.5 py-0.2 rounded-full font-bold border ${p.badge_color}`}>
-                              {p.role}
-                            </span>
-                          </div>
-                          <div className="text-[11px] text-muted-foreground font-medium">{p.display_title}</div>
-                          <div className="text-[10px] text-muted-foreground/80 mt-0.5 line-clamp-1">{p.description}</div>
-                        </div>
-                      </div>
-                      {isSelected && (
-                        <div className="text-primary mt-1 shrink-0">
-                          <CheckCircle2 size={16} />
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                <button
+                  onClick={() => {
+                    setIsUserMenuOpen(false);
+                    navigate('/dashboard');
+                  }}
+                  className="w-full text-left px-3 py-2 rounded-xl text-xs text-foreground hover:bg-accent transition flex items-center gap-2"
+                >
+                  <Sparkles size={14} className="text-primary" /> My Workspace Dashboard
+                </button>
+
+                <button
+                  onClick={handleLogout}
+                  className="w-full text-left px-3 py-2 rounded-xl text-xs text-rose-500 hover:bg-rose-500/10 transition flex items-center gap-2 font-semibold"
+                >
+                  <LogOut size={14} /> Sign Out / Switch User
+                </button>
               </div>
             </div>
           )}

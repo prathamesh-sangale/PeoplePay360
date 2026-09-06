@@ -1,8 +1,15 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { getSchedules, createSchedule, assignSchedule, getScheduleAssignments, getEmployees } from '../lib/api';
+import {
+  getSchedules,
+  createSchedule,
+  updateSchedule,
+  assignSchedule,
+  getScheduleAssignments,
+  getEmployees,
+} from '../lib/api';
 import { formatTime12Hour } from '../lib/formatters';
-import { Clock, CheckCircle2, Plus, Users, Layers, AlertCircle } from 'lucide-react';
+import { Clock, Plus, Users, Layers, AlertCircle, Edit3 } from 'lucide-react';
 
 const DAYS_OF_WEEK = [
   { day_of_week: 0, day_name: 'Monday' },
@@ -18,7 +25,9 @@ export default function Schedules() {
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<'schedules' | 'assignments'>('schedules');
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
+  const [editingSched, setEditingSched] = useState<any | null>(null);
 
   // Create Form State
   const [schedName, setSchedName] = useState('');
@@ -34,6 +43,13 @@ export default function Schedules() {
     }))
   );
   const [createError, setCreateError] = useState('');
+
+  // Edit Form State
+  const [editName, setEditName] = useState('');
+  const [editCode, setEditCode] = useState('');
+  const [editWeeklyHours, setEditWeeklyHours] = useState(40);
+  const [editDaysState, setEditDaysState] = useState<any[]>([]);
+  const [editError, setEditError] = useState('');
 
   // Assign Form State
   const [assignEmpId, setAssignEmpId] = useState('');
@@ -71,6 +87,20 @@ export default function Schedules() {
     },
   });
 
+  const updateMutation = useMutation({
+    mutationFn: ({ id, payload }: { id: string | number; payload: any }) => updateSchedule(id, payload),
+    onSuccess: () => {
+      setIsEditModalOpen(false);
+      setEditingSched(null);
+      setEditError('');
+      queryClient.invalidateQueries({ queryKey: ['schedules'] });
+      queryClient.invalidateQueries({ queryKey: ['schedule-assignments'] });
+    },
+    onError: (err: any) => {
+      setEditError(err.message || 'Failed to update schedule.');
+    },
+  });
+
   const assignMutation = useMutation({
     mutationFn: assignSchedule,
     onSuccess: () => {
@@ -83,6 +113,28 @@ export default function Schedules() {
       setAssignError(err.message || 'Failed to assign schedule.');
     },
   });
+
+  const handleOpenEdit = (sched: any) => {
+    setEditingSched(sched);
+    setEditName(sched.name);
+    setEditCode(sched.code);
+    setEditWeeklyHours(Number(sched.weekly_hours || sched.hours_per_week || 40));
+    setEditError('');
+
+    const existingDays = sched.days || [];
+    const populated = DAYS_OF_WEEK.map((d) => {
+      const match = existingDays.find((ed: any) => ed.day_of_week === d.day_of_week);
+      return {
+        day_of_week: d.day_of_week,
+        day_name: d.day_name,
+        start_time: match?.start_time || '09:00',
+        end_time: match?.end_time || '18:00',
+        is_working_day: match ? match.is_working_day : d.day_of_week < 5,
+      };
+    });
+    setEditDaysState(populated);
+    setIsEditModalOpen(true);
+  };
 
   const handleOpenAssign = (scheduleId?: string) => {
     setAssignError('');
@@ -113,6 +165,39 @@ export default function Schedules() {
         end_time: d.end_time,
         is_working_day: d.is_working_day,
       })),
+    });
+  };
+
+  const handleEditSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setEditError('');
+    if (!editingSched) return;
+    if (!editName.trim() || !editCode.trim()) {
+      setEditError('Name and Code are required.');
+      return;
+    }
+
+    // Validation: for working days, start_time < end_time
+    for (const d of editDaysState) {
+      if (d.is_working_day && d.start_time >= d.end_time) {
+        setEditError(`${d.day_name}: Start time (${d.start_time}) must be earlier than End time (${d.end_time}).`);
+        return;
+      }
+    }
+
+    updateMutation.mutate({
+      id: editingSched.id,
+      payload: {
+        name: editName.trim(),
+        code: editCode.trim().toUpperCase(),
+        weekly_hours: Number(editWeeklyHours),
+        days: editDaysState.map((d) => ({
+          day_of_week: d.day_of_week,
+          start_time: d.start_time,
+          end_time: d.end_time,
+          is_working_day: d.is_working_day,
+        })),
+      },
     });
   };
 
@@ -260,12 +345,20 @@ export default function Schedules() {
                   <span className="flex items-center gap-1">
                     <Users size={13} className="text-primary" /> {s.assigned_employees || 0} assigned
                   </span>
-                  <button
-                    onClick={() => handleOpenAssign(s.id)}
-                    className="text-xs text-primary font-bold hover:underline"
-                  >
-                    Assign Roster →
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleOpenEdit(s)}
+                      className="px-2.5 py-1 rounded-lg bg-card hover:bg-accent border border-border text-foreground text-xs font-semibold flex items-center gap-1 transition-all"
+                    >
+                      <Edit3 size={12} className="text-primary" /> Edit
+                    </button>
+                    <button
+                      onClick={() => handleOpenAssign(s.id)}
+                      className="text-xs text-primary font-bold hover:underline"
+                    >
+                      Assign Roster →
+                    </button>
+                  </div>
                 </div>
               </div>
             );
@@ -278,42 +371,29 @@ export default function Schedules() {
         <div className="p-6 rounded-2xl bg-card border border-border overflow-hidden shadow-xs">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-border text-xs text-muted-foreground uppercase">
-                  <th className="py-3 px-4">Employee</th>
-                  <th className="py-3 px-4">Department</th>
-                  <th className="py-3 px-4">Assigned Shift</th>
-                  <th className="py-3 px-4">Hours / Wk</th>
-                  <th className="py-3 px-4">Effective Date</th>
-                  <th className="py-3 px-4">Status</th>
+              <thead className="bg-muted/50 border-b border-border text-xs text-muted-foreground uppercase">
+                <tr>
+                  <th className="p-3.5">Employee</th>
+                  <th className="p-3.5">Assigned Shift</th>
+                  <th className="p-3.5">Weekly Hours</th>
+                  <th className="p-3.5">Effective Date</th>
+                  <th className="p-3.5">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/60">
-                {assignments && assignments.length > 0 ? (
-                  assignments.map((a: any) => (
-                    <tr key={a.id} className="hover:bg-accent/30 transition-colors">
-                      <td className="py-3.5 px-4 font-semibold text-foreground">
-                        {a.employee_name}
-                        <div className="text-xs text-muted-foreground font-mono">{a.employee_code}</div>
-                      </td>
-                      <td className="py-3.5 px-4 text-xs text-muted-foreground">{a.department}</td>
-                      <td className="py-3.5 px-4 font-bold text-foreground">{a.schedule_name}</td>
-                      <td className="py-3.5 px-4 text-xs font-mono">{a.weekly_hours} hrs</td>
-                      <td className="py-3.5 px-4 text-xs font-mono">{a.start_date}</td>
-                      <td className="py-3.5 px-4">
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
-                          <CheckCircle2 size={10} /> Active
-                        </span>
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td colSpan={6} className="py-8 text-center text-xs text-muted-foreground">
-                      No schedule assignments found.
+                {assignments?.map((a: any) => (
+                  <tr key={a.id} className="hover:bg-muted/30">
+                    <td className="p-3.5 font-medium text-foreground">{a.employee_name}</td>
+                    <td className="p-3.5">{a.schedule_name}</td>
+                    <td className="p-3.5 font-mono">{a.weekly_hours} hrs</td>
+                    <td className="p-3.5 font-mono text-muted-foreground">{a.start_date}</td>
+                    <td className="p-3.5">
+                      <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                        ACTIVE
+                      </span>
                     </td>
                   </tr>
-                )}
+                ))}
               </tbody>
             </table>
           </div>
@@ -373,29 +453,30 @@ export default function Schedules() {
                   step="0.5"
                   value={weeklyHours}
                   onChange={(e) => setWeeklyHours(Number(e.target.value))}
-                  className="w-full p-2.5 rounded-xl border border-input bg-background focus:ring-1 focus:ring-primary focus:outline-none text-foreground font-bold"
+                  className="w-full p-2.5 rounded-xl border border-input bg-background focus:ring-1 focus:ring-primary focus:outline-none text-foreground font-mono"
                 />
               </div>
 
-              {/* 7-Day Day Timings */}
-              <div className="space-y-2 pt-2 border-t border-border">
-                <label className="font-bold text-foreground block">Weekly Days & Shift Hours</label>
+              <div>
+                <label className="font-semibold text-muted-foreground block mb-2">Shift Days & Working Hours</label>
                 <div className="space-y-2">
                   {daysState.map((d, index) => (
-                    <div key={d.day_of_week} className="flex items-center gap-3 p-2.5 rounded-xl bg-background border border-border">
-                      <div className="w-24 font-bold text-foreground flex items-center gap-1.5">
-                        <input
-                          type="checkbox"
-                          checked={d.is_working_day}
-                          onChange={(e) => {
-                            const updated = [...daysState];
-                            updated[index].is_working_day = e.target.checked;
-                            setDaysState(updated);
-                          }}
-                          className="rounded text-primary h-3.5 w-3.5"
-                        />
-                        <span>{d.day_name}</span>
-                      </div>
+                    <div key={d.day_of_week} className="flex items-center gap-3 p-2 rounded-xl bg-accent/30 border border-border">
+                      <input
+                        type="checkbox"
+                        id={`day-${d.day_of_week}`}
+                        checked={d.is_working_day}
+                        onChange={(e) => {
+                          const updated = [...daysState];
+                          updated[index].is_working_day = e.target.checked;
+                          setDaysState(updated);
+                        }}
+                        className="rounded border-input text-primary focus:ring-primary"
+                      />
+                      <label htmlFor={`day-${d.day_of_week}`} className="w-24 font-semibold text-foreground">
+                        {d.day_name}
+                      </label>
+
                       {d.is_working_day ? (
                         <div className="flex items-center gap-2 flex-1">
                           <input
@@ -406,7 +487,7 @@ export default function Schedules() {
                               updated[index].start_time = e.target.value;
                               setDaysState(updated);
                             }}
-                            className="p-1 rounded-lg border border-input bg-card text-foreground text-xs"
+                            className="p-1 rounded-lg border border-input bg-card text-foreground text-xs font-mono"
                           />
                           <span className="text-muted-foreground">to</span>
                           <input
@@ -417,7 +498,7 @@ export default function Schedules() {
                               updated[index].end_time = e.target.value;
                               setDaysState(updated);
                             }}
-                            className="p-1 rounded-lg border border-input bg-card text-foreground text-xs"
+                            className="p-1 rounded-lg border border-input bg-card text-foreground text-xs font-mono"
                           />
                         </div>
                       ) : (
@@ -442,6 +523,134 @@ export default function Schedules() {
                   className="px-4 py-2 bg-primary text-primary-foreground font-semibold rounded-xl text-xs hover:opacity-90 shadow-sm"
                 >
                   {createMutation.isPending ? 'Saving...' : 'Save Schedule'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT SCHEDULE MODAL */}
+      {isEditModalOpen && editingSched && (
+        <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-card border border-border p-6 rounded-3xl max-w-xl w-full shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-2 border-b border-border">
+              <div className="flex items-center gap-2 text-primary font-bold text-base">
+                <Edit3 size={20} />
+                <h3 className="text-foreground">Edit Working Schedule</h3>
+              </div>
+              <button onClick={() => setIsEditModalOpen(false)} className="text-muted-foreground hover:text-foreground text-sm font-bold">
+                ✕
+              </button>
+            </div>
+
+            {editError && (
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-500 text-xs flex items-center gap-2">
+                <AlertCircle size={16} /> {editError}
+              </div>
+            )}
+
+            <form onSubmit={handleEditSubmit} className="space-y-4 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="sm:col-span-2">
+                  <label className="font-semibold text-muted-foreground block mb-1">Schedule Name</label>
+                  <input
+                    type="text"
+                    required
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-input bg-background focus:ring-1 focus:ring-primary focus:outline-none text-foreground font-medium"
+                  />
+                </div>
+                <div>
+                  <label className="font-semibold text-muted-foreground block mb-1">Schedule Code</label>
+                  <input
+                    type="text"
+                    required
+                    value={editCode}
+                    onChange={(e) => setEditCode(e.target.value.toUpperCase())}
+                    className="w-full p-2.5 rounded-xl border border-input bg-background focus:ring-1 focus:ring-primary focus:outline-none text-foreground font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="font-semibold text-muted-foreground block mb-1">Weekly Working Hours</label>
+                <input
+                  type="number"
+                  step="0.5"
+                  value={editWeeklyHours}
+                  onChange={(e) => setEditWeeklyHours(Number(e.target.value))}
+                  className="w-full p-2.5 rounded-xl border border-input bg-background focus:ring-1 focus:ring-primary focus:outline-none text-foreground font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="font-semibold text-muted-foreground block mb-2">Shift Days & Working Hours</label>
+                <div className="space-y-2">
+                  {editDaysState.map((d, index) => (
+                    <div key={d.day_of_week} className="flex items-center gap-3 p-2 rounded-xl bg-accent/30 border border-border">
+                      <input
+                        type="checkbox"
+                        id={`edit-day-${d.day_of_week}`}
+                        checked={d.is_working_day}
+                        onChange={(e) => {
+                          const updated = [...editDaysState];
+                          updated[index].is_working_day = e.target.checked;
+                          setEditDaysState(updated);
+                        }}
+                        className="rounded border-input text-primary focus:ring-primary"
+                      />
+                      <label htmlFor={`edit-day-${d.day_of_week}`} className="w-24 font-semibold text-foreground">
+                        {d.day_name}
+                      </label>
+
+                      {d.is_working_day ? (
+                        <div className="flex items-center gap-2 flex-1">
+                          <input
+                            type="time"
+                            value={d.start_time}
+                            onChange={(e) => {
+                              const updated = [...editDaysState];
+                              updated[index].start_time = e.target.value;
+                              setEditDaysState(updated);
+                            }}
+                            className="p-1 rounded-lg border border-input bg-card text-foreground text-xs font-mono"
+                          />
+                          <span className="text-muted-foreground">to</span>
+                          <input
+                            type="time"
+                            value={d.end_time}
+                            onChange={(e) => {
+                              const updated = [...editDaysState];
+                              updated[index].end_time = e.target.value;
+                              setEditDaysState(updated);
+                            }}
+                            className="p-1 rounded-lg border border-input bg-card text-foreground text-xs font-mono"
+                          />
+                        </div>
+                      ) : (
+                        <span className="text-xs italic text-muted-foreground flex-1">Weekly Off</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-border">
+                <button
+                  type="button"
+                  onClick={() => setIsEditModalOpen(false)}
+                  className="px-4 py-2 rounded-xl text-muted-foreground hover:bg-accent text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={updateMutation.isPending}
+                  className="px-4 py-2 bg-primary text-primary-foreground font-semibold rounded-xl text-xs hover:opacity-90 shadow-sm"
+                >
+                  {updateMutation.isPending ? 'Updating...' : 'Update Schedule'}
                 </button>
               </div>
             </form>

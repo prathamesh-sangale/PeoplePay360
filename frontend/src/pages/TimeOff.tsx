@@ -36,6 +36,9 @@ const getInitialWorkingDate = (offsetDays = 0) => {
 
 export default function TimeOff() {
   const queryClient = useQueryClient();
+  const currentRole = (localStorage.getItem('peoplepay360_active_role') || 'ADMIN').toUpperCase();
+  const isEmployeeRole = currentRole === 'EMPLOYEE';
+
   const [activeTab, setActiveTab] = useState<'requests' | 'allocations'>('requests');
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
@@ -300,20 +303,22 @@ export default function TimeOff() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => {
-              setAllocError('');
-              if (employees && employees.length > 0) setAllocEmpId(String(employees[0].id));
-              if (types && types.length > 0) {
-                const paidType = types.find((t: any) => t.is_paid && t.allocation_required && t.code !== 'UNPAID') || types[0];
-                setAllocTypeId(String(paidType.id));
-              }
-              setIsAllocateModalOpen(true);
-            }}
-            className="px-4 py-2 bg-secondary text-secondary-foreground text-xs font-semibold rounded-xl hover:bg-secondary/80 transition-all flex items-center gap-1.5 border border-border"
-          >
-            <Layers size={15} /> Allocate Leave Quota
-          </button>
+          {!isEmployeeRole && (
+            <button
+              onClick={() => {
+                setAllocError('');
+                if (employees && employees.length > 0) setAllocEmpId(String(employees[0].id));
+                if (types && types.length > 0) {
+                  const paidType = types.find((t: any) => t.is_paid && t.allocation_required && t.code !== 'UNPAID') || types[0];
+                  setAllocTypeId(String(paidType.id));
+                }
+                setIsAllocateModalOpen(true);
+              }}
+              className="px-4 py-2 bg-secondary text-secondary-foreground text-xs font-semibold rounded-xl hover:bg-secondary/80 transition-all flex items-center gap-1.5 border border-border"
+            >
+              <Layers size={15} /> Allocate Leave Quota
+            </button>
+          )}
           <button
             onClick={() => {
               setFormError('');
@@ -610,21 +615,27 @@ export default function TimeOff() {
                           </td>
                           <td className="py-3.5 px-4 text-right">
                             {r.status === 'PENDING' ? (
-                              <div className="flex items-center justify-end gap-2">
-                                <button
-                                  onClick={() => approveMutation.mutate(Number(r.id))}
-                                  disabled={approveMutation.isPending}
-                                  className="px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1 border border-emerald-500/20"
-                                >
-                                  <CheckCircle2 size={13} /> Approve
-                                </button>
-                                <button
-                                  onClick={() => handleRejectClick(Number(r.id))}
-                                  className="px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1 border border-rose-500/20"
-                                >
-                                  <XCircle size={13} /> Refuse
-                                </button>
-                              </div>
+                              !isEmployeeRole ? (
+                                <div className="flex items-center justify-end gap-2">
+                                  <button
+                                    onClick={() => approveMutation.mutate(Number(r.id))}
+                                    disabled={approveMutation.isPending}
+                                    className="px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-500 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1 border border-emerald-500/20"
+                                  >
+                                    <CheckCircle2 size={13} /> Approve
+                                  </button>
+                                  <button
+                                    onClick={() => handleRejectClick(Number(r.id))}
+                                    className="px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1 border border-rose-500/20"
+                                  >
+                                    <XCircle size={13} /> Refuse
+                                  </button>
+                                </div>
+                              ) : (
+                                <span className="text-xs text-amber-500 font-medium flex items-center justify-end gap-1">
+                                  <Clock size={13} /> Under Review
+                                </span>
+                              )
                             ) : (
                               <span className="text-xs text-muted-foreground font-medium flex items-center justify-end gap-1">
                                 <Check size={13} className="text-muted-foreground" /> Decided

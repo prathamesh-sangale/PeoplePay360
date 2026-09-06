@@ -151,12 +151,23 @@ def update_schedule(id: int, payload: ScheduleUpdate, db: Session = Depends(get_
                 WorkingScheduleDay.working_schedule_id == sched.id,
                 WorkingScheduleDay.day_of_week == inp.day_of_week,
             ).first()
+            st = time.fromisoformat(inp.start_time) if inp.start_time else time(9, 0)
+            et = time.fromisoformat(inp.end_time) if inp.end_time else time(18, 0)
             if s_day:
                 s_day.is_working_day = inp.is_working_day
                 if inp.start_time:
-                    s_day.start_time = time.fromisoformat(inp.start_time)
+                    s_day.start_time = st
                 if inp.end_time:
-                    s_day.end_time = time.fromisoformat(inp.end_time)
+                    s_day.end_time = et
+            else:
+                s_day = WorkingScheduleDay(
+                    working_schedule_id=sched.id,
+                    day_of_week=inp.day_of_week,
+                    start_time=st,
+                    end_time=et,
+                    is_working_day=inp.is_working_day,
+                )
+                db.add(s_day)
 
     db.commit()
     db.refresh(sched)
@@ -165,6 +176,9 @@ def update_schedule(id: int, payload: ScheduleUpdate, db: Session = Depends(get_
         "status": "success",
         "message": f"Working Schedule '{sched.name}' updated successfully.",
         "id": str(sched.id),
+        "name": sched.name,
+        "code": sched.code,
+        "weekly_hours": float(sched.weekly_hours or 40.0),
     }
 
 
