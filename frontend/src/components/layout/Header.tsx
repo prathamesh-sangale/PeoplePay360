@@ -160,79 +160,81 @@ export default function Header() {
           />
         </div>
 
-        {/* Fast Role / Persona Quick Switch Dropdown Menu */}
-        <div className="relative" ref={quickSwitchRef}>
-          <button
-            onClick={() => setIsQuickSwitchOpen(!isQuickSwitchOpen)}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-primary/30 bg-primary/10 hover:bg-primary/20 text-foreground text-xs font-bold transition-all shadow-xs cursor-pointer"
-            title="Switch Role / Persona instantly"
-          >
-            <Zap size={14} className="text-amber-400 fill-amber-400" />
-            <span className="hidden lg:inline text-muted-foreground font-normal">Switch Role:</span>
-            <span className="font-extrabold text-foreground truncate max-w-[120px] sm:max-w-[160px]">
-              {currentPersona.full_name}
-            </span>
-            <ChevronDown size={13} className="text-muted-foreground shrink-0" />
-          </button>
+        {/* Fast Role / Persona Quick Switch Dropdown Menu (Hidden in Employee UI) */}
+        {currentRole !== 'EMPLOYEE' && (
+          <div className="relative" ref={quickSwitchRef}>
+            <button
+              onClick={() => setIsQuickSwitchOpen(!isQuickSwitchOpen)}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-primary/30 bg-primary/10 hover:bg-primary/20 text-foreground text-xs font-bold transition-all shadow-xs cursor-pointer"
+              title="Switch Role / Persona instantly"
+            >
+              <Zap size={14} className="text-amber-400 fill-amber-400" />
+              <span className="hidden lg:inline text-muted-foreground font-normal">Switch Role:</span>
+              <span className="font-extrabold text-foreground truncate max-w-[120px] sm:max-w-[160px]">
+                {currentPersona.full_name}
+              </span>
+              <ChevronDown size={13} className="text-muted-foreground shrink-0" />
+            </button>
 
-          {isQuickSwitchOpen && (
-            <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl bg-card border border-border shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200 z-50 p-2">
-              <div className="p-3 border-b border-border bg-accent/20 rounded-xl mb-2 flex items-center justify-between">
-                <div>
-                  <div className="text-xs font-bold text-foreground flex items-center gap-1.5">
-                    <Zap size={14} className="text-amber-400 fill-amber-400" /> Fast Role Switcher
+            {isQuickSwitchOpen && (
+              <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl bg-card border border-border shadow-2xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200 z-50 p-2">
+                <div className="p-3 border-b border-border bg-accent/20 rounded-xl mb-2 flex items-center justify-between">
+                  <div>
+                    <div className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                      <Zap size={14} className="text-amber-400 fill-amber-400" /> Fast Role Switcher
+                    </div>
+                    <div className="text-[10px] text-muted-foreground mt-0.5">
+                      Instantly switch between Admin, HR, Payroll, and Employee portals
+                    </div>
                   </div>
-                  <div className="text-[10px] text-muted-foreground mt-0.5">
-                    Instantly switch between Admin, HR, Payroll, and Employee portals
-                  </div>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-primary/10 text-primary border border-primary/20">
+                    {CANONICAL_PERSONAS.length} Accounts
+                  </span>
                 </div>
-                <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-primary/10 text-primary border border-primary/20">
-                  {CANONICAL_PERSONAS.length} Accounts
-                </span>
-              </div>
 
-              <div className="max-h-[380px] overflow-y-auto space-y-1 pr-1">
-                {CANONICAL_PERSONAS.map((p) => {
-                  const isActive = currentPersona.email.toLowerCase() === p.email.toLowerCase();
-                  return (
-                    <button
-                      key={`${p.role}-${p.user_id}`}
-                      onClick={() => handleQuickSwitch(p)}
-                      className={`w-full p-2.5 rounded-xl text-left transition-all flex items-center justify-between gap-2.5 cursor-pointer ${
-                        isActive
-                          ? 'bg-primary/15 border border-primary/40 text-foreground shadow-xs'
-                          : 'hover:bg-accent/60 text-muted-foreground hover:text-foreground border border-transparent'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <div className="p-2 rounded-xl bg-card border border-border shrink-0 shadow-xs">
-                          {getRoleIcon(p.role)}
-                        </div>
-                        <div className="min-w-0 truncate">
-                          <div className="text-xs font-bold text-foreground truncate flex items-center gap-1.5">
-                            {p.full_name}
-                            {isActive && (
-                              <span className="text-[9px] px-1.5 py-0.2 rounded-md bg-emerald-500/15 text-emerald-500 font-bold border border-emerald-500/30">
-                                Active
-                              </span>
-                            )}
+                <div className="max-h-[380px] overflow-y-auto space-y-1 pr-1">
+                  {CANONICAL_PERSONAS.map((p) => {
+                    const isActive = currentPersona.email.toLowerCase() === p.email.toLowerCase();
+                    return (
+                      <button
+                        key={`${p.role}-${p.user_id}`}
+                        onClick={() => handleQuickSwitch(p)}
+                        className={`w-full p-2.5 rounded-xl text-left transition-all flex items-center justify-between gap-2.5 cursor-pointer ${
+                          isActive
+                            ? 'bg-primary/15 border border-primary/40 text-foreground shadow-xs'
+                            : 'hover:bg-accent/60 text-muted-foreground hover:text-foreground border border-transparent'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="p-2 rounded-xl bg-card border border-border shrink-0 shadow-xs">
+                            {getRoleIcon(p.role)}
                           </div>
-                          <div className="text-[10px] text-muted-foreground truncate mt-0.5">
-                            {p.display_title || p.role} • {p.department}
+                          <div className="min-w-0 truncate">
+                            <div className="text-xs font-bold text-foreground truncate flex items-center gap-1.5">
+                              {p.full_name}
+                              {isActive && (
+                                <span className="text-[9px] px-1.5 py-0.2 rounded-md bg-emerald-500/15 text-emerald-500 font-bold border border-emerald-500/30">
+                                  Active
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[10px] text-muted-foreground truncate mt-0.5">
+                              {p.display_title || p.role} • {p.department}
+                            </div>
                           </div>
                         </div>
-                      </div>
 
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 border ${p.badge_color}`}>
-                        {p.role}
-                      </span>
-                    </button>
-                  );
-                })}
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 border ${p.badge_color}`}>
+                          {p.role}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
 
         {/* Interactive Notification Bell */}
         <div className="relative" ref={notifDropdownRef}>
